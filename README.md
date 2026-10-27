@@ -116,7 +116,7 @@ gitlab-deck --demo --lang en
 gitlab-deck --lang ru
 ```
 
-Press `L` to switch between EN/RU in the TUI. Normal mode saves your choice; demo mode leaves your settings unchanged.
+Press `L` to switch between EN/RU in the TUI and refresh the current screen. Normal mode saves your choice; demo mode leaves your settings unchanged.
 
 Language priority is `--lang` → saved language → system locale → English. Locale detection uses the first non-empty value of `LC_ALL`, `LC_MESSAGES`, and `LANG`: a `ru` locale selects Russian; other locales select English.
 

@@ -15,6 +15,19 @@ fn cli_saved_language_and_locale_have_explicit_priority() {
             .unwrap()
     };
     let check = ["--demo", "--check"];
+    let all = Command::new(env!("CARGO_BIN_EXE_gitlab-deck"))
+        .args(check)
+        .env("XDG_CONFIG_HOME", &directory)
+        .env("LC_ALL", "C.UTF-8")
+        .env("LC_MESSAGES", "ru_RU.UTF-8")
+        .env("LANG", "ru_RU.UTF-8")
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8(all.stdout)
+            .unwrap()
+            .contains("Connection verified")
+    );
     assert!(
         String::from_utf8(run(&check, "").stdout)
             .unwrap()

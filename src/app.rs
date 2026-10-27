@@ -36,6 +36,7 @@ pub struct App {
     active: Option<(Arc<AtomicBool>, bool)>,
     can_next: bool,
     after_load: Option<String>,
+    unknown_change: Option<String>,
 }
 
 impl App {
@@ -47,6 +48,7 @@ impl App {
             active: None,
             can_next: false,
             after_load: None,
+            unknown_change: None,
         }
     }
 
@@ -63,6 +65,10 @@ impl App {
     }
 
     fn fetch(&mut self, request: Request) -> Vec<Effect> {
+        if request.is_mutation() {
+            self.unknown_change = None;
+            self.after_load = None;
+        }
         self.cancel();
         let token = Arc::new(AtomicBool::new(false));
         self.active = Some((token.clone(), request.is_mutation()));
@@ -237,6 +243,8 @@ impl App {
     }
 
     fn navigate(&mut self, context: Context) -> Vec<Effect> {
+        self.unknown_change = None;
+        self.after_load = None;
         if self.history.len() == 32 {
             self.history.remove(0);
         }
@@ -259,6 +267,7 @@ impl App {
         self.state.error = None;
         self.state.popup = None;
         self.after_load = None;
+        self.unknown_change = None;
         if let Some(previous) = self.history.pop() {
             self.state.context = previous.context;
             self.state.rows = previous.rows;
@@ -861,6 +870,8 @@ impl App {
                                 }
                                 self.cancel();
                                 self.history.clear();
+                                self.unknown_change = None;
+                                self.after_load = None;
                                 self.state.popup = None;
                                 self.state.host = value;
                                 self.state.context = Context::default();
@@ -921,7 +932,13 @@ impl App {
             KeyCode::Char('L') => {
                 self.state.language = self.state.language.toggle();
                 self.localize_cached_text();
-                vec![Effect::SavePreferences]
+                self.after_load = self.unknown_notice();
+                let mut effects = vec![Effect::SavePreferences];
+                effects.extend(self.refresh());
+                if let Some(warning) = self.unknown_notice() {
+                    self.state.status = warning;
+                }
+                effects
             }
             KeyCode::Char('?') => {
                 self.state.popup_scroll = 0;
@@ -1109,13 +1126,11 @@ impl App {
             Err(mut error) => {
                 error.message = self.state.language.error_message(&error.message);
                 if error.uncertain {
-                    self.after_load = Some(crate::tr!(
-                        self.state.language,
-                        "Change outcome unknown. Data reloaded; verify the result. {}",
-                        "Результат изменения неизвестен. Данные перечитаны; сверьте состояние. {}",
-                        error.message
-                    ));
-                    return self.refresh();
+                    self.unknown_change = Some(error.message);
+                    self.after_load = self.unknown_notice();
+                    let effects = self.refresh();
+                    self.state.status = self.unknown_notice().unwrap_or_default();
+                    return effects;
                 }
                 if let Some(warning) = self.after_load.take() {
                     self.state.error = Some(crate::tr!(
@@ -1317,6 +1332,17 @@ impl App {
             Some(existing) => format!("{existing} · {message}"),
             None => message.into(),
         });
+    }
+
+    fn unknown_notice(&self) -> Option<String> {
+        self.unknown_change.as_ref().map(|message| {
+            crate::tr!(
+                self.state.language,
+                "Change outcome unknown. Verify the result in GitLab. {}",
+                "Результат изменения неизвестен. Сверьте состояние в GitLab. {}",
+                self.state.language.error_message(message)
+            )
+        })
     }
 }
 
@@ -1531,5 +1557,110 @@ mod tests {
         assert_eq!(app.state.context.view, View::Favorites);
         app.key(key('*'));
         assert!(app.state.favorites.is_empty());
+    }
+
+    #[test]
+    fn language_switch_reloads_owned_messages_and_keeps_unknown_outcome() {
+        let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
+        app.state.context.view = View::Settings;
+        app.state.context.project = Some(json!({"id":7}));
+        app.state.error = Some("Для редактирования требуется роль Maintainer или Owner".into());
+        assert!(
+            app.key(key('L'))
+                .iter()
+                .any(|effect| matches!(effect, Effect::Fetch { .. }))
+        );
+        assert!(app.state.error.is_none());
+        app.accept(
+            app.generation,
+            Err(ApiError {
+                message: "GitLab отклонил запрос: недостаточно прав (403)".into(),
+                uncertain: false,
+                http_status: Some(403),
+            }),
+        );
+        assert!(
+            app.state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("insufficient permissions")
+        );
+        app.refresh();
+        finish(&mut app, json!({"id":7}));
+        assert!(app.state.status.starts_with("Page"));
+
+        app.state.language = Language::Ru;
+        app.fetch(Request::put("projects/7", json!({"description":"Новое"})));
+        app.accept(
+            app.generation,
+            Ok(Response::Json(json!({"id":7,"description":"Новое"}))),
+        );
+        app.accept(
+            app.generation,
+            Err(ApiError {
+                message: "Не удалось запустить glab".into(),
+                uncertain: false,
+                http_status: None,
+            }),
+        );
+        assert!(
+            app.state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("Повторное чтение")
+        );
+        app.key(key('L'));
+        assert!(app.state.error.is_none());
+        app.state.language = Language::Ru;
+        app.fetch(Request::put("projects/7", json!({"description":"Новое"})));
+        app.accept(
+            app.generation,
+            Ok(Response::Json(json!({"id":7,"description":"Новое"}))),
+        );
+        app.key(key('L'));
+        finish(&mut app, json!({"id":7,"description":"Новое"}));
+        assert!(app.state.status.starts_with("Page"));
+        app.state.language = Language::Ru;
+        app.fetch(Request::put("projects/7", json!({"description":"Проекты"})));
+        app.accept(
+            app.generation,
+            Err(ApiError {
+                message: "GitLab не ответил за отведённое время".into(),
+                uncertain: true,
+                http_status: None,
+            }),
+        );
+        app.key(key('L'));
+        assert!(app.state.status.contains("Change outcome unknown"));
+        app.accept(
+            app.generation,
+            Err(ApiError {
+                message: "Could not start glab".into(),
+                uncertain: false,
+                http_status: None,
+            }),
+        );
+        let error = app.state.error.as_deref().unwrap();
+        assert!(error.contains("Change outcome unknown") && error.contains("Reload failed"));
+        assert!(!error.chars().any(|c| ('А'..='я').contains(&c)));
+
+        let mut mr = App::new("example.org".into(), true);
+        mr.state.context.project = Some(json!({"id":7}));
+        mr.state.context.view = View::MrDetails;
+        let source = json!({"iid":3,"title":"Описание / Description","description":"Проекты / Projects","state":"opened"});
+        mr.apply(Response::Json(source.clone())).unwrap();
+        assert!(mr.state.text.contains("Status:"));
+        mr.key(key('f'));
+        mr.key(key('L'));
+        mr.back();
+        assert!(mr.state.text.contains("Статус:"));
+        assert!(mr.state.text.contains("Проекты / Projects"));
+        assert_eq!(mr.state.object, source);
+        mr.key(key('L'));
+        assert!(mr.state.text.contains("Status:"));
+        assert_eq!(mr.state.object, source);
     }
 }

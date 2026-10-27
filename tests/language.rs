@@ -38,6 +38,7 @@ fn language_switch_preserves_content_and_confirmed_payloads() {
     );
     assert_eq!(app.state.language, Language::Ru);
     assert_eq!((app.state.rows.clone(), app.state.text.clone()), before);
+    app.cancel();
     for language in [Language::En, Language::Ru] {
         app.state.language = language;
         app.state.context.view = View::Settings;
