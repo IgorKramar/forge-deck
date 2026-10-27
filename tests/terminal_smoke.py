@@ -12,7 +12,7 @@ import termios
 import time
 
 
-def smoke(binary, columns, rows):
+def smoke(binary, columns, rows, language):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
@@ -34,7 +34,7 @@ def smoke(binary, columns, rows):
 
     with tempfile.TemporaryDirectory(prefix="deck-pty-") as config:
         process = subprocess.Popen(
-            [str(binary), "--demo"], stdin=slave, stdout=slave, stderr=slave,
+            [str(binary), "--demo", "--lang", language], stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, "TERM": "xterm-256color", "XDG_CONFIG_HOME": config},
             preexec_fn=terminal_session,
         )
@@ -46,7 +46,10 @@ def smoke(binary, columns, rows):
                 for key in [b"\r", b"p", b"\r", b"\r", b"?", b"q", b"s"]:
                     os.write(master, key)
                     drain(0.12)
-                assert "Настройки".encode() in output
+                assert ("Settings" if language == "en" else "Настройки").encode() in output
+                os.write(master, b"L")
+                drain(0.2)
+                assert ("Настройки" if language == "en" else "Settings").encode() in output
             else:
                 assert b"80" in output and b"24" in output
             os.write(master, b"q")
@@ -62,10 +65,11 @@ def smoke(binary, columns, rows):
                 process.wait()
             os.close(master)
             os.close(slave)
-    print(f"PTY {columns}x{rows}: запуск, навигация, выход, восстановление — OK")
+    print(f"PTY {language} {columns}x{rows}: запуск, навигация, выход, восстановление — OK")
 
 
 if __name__ == "__main__":
     executable = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/gitlab-deck").resolve()
-    for size in [(160, 48), (100, 32), (72, 22)]:
-        smoke(executable, *size)
+    for language in ["en", "ru"]:
+        for size in [(160, 48), (100, 32), (72, 22)]:
+            smoke(executable, *size, language)

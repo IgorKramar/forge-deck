@@ -69,9 +69,11 @@ impl App {
         self.state.loading = true;
         self.state.error = None;
         self.state.status = if request.is_mutation() {
-            "Отправка изменения…"
+            self.state
+                .language
+                .text("Sending change…", "Отправка изменения…")
         } else {
-            "Загрузка…"
+            self.state.language.text("Loading…", "Загрузка…")
         }
         .into();
         vec![Effect::Fetch {
@@ -96,9 +98,12 @@ impl App {
         let page = format!("per_page={PAGE_SIZE}&page={}", c.page);
         let search = encode(&c.query);
         let project = || {
-            self.state
-                .project_id()
-                .ok_or_else(|| "Сначала выберите проект".to_owned())
+            self.state.project_id().ok_or_else(|| {
+                self.state
+                    .language
+                    .text("Select a project first", "Сначала выберите проект")
+                    .to_owned()
+            })
         };
         let list = match c.view {
             View::Projects => match &c.group {
@@ -137,7 +142,14 @@ impl App {
                 return Ok(Request::text(format!(
                     "projects/{}/repository/blobs/{}/raw",
                     project()?,
-                    encode(string(c.file.as_ref().ok_or("Файл не выбран")?, "id"))
+                    encode(string(
+                        c.file.as_ref().ok_or(
+                            self.state
+                                .language
+                                .text("No file selected", "Файл не выбран")
+                        )?,
+                        "id"
+                    ))
                 )));
             }
             View::Branches => format!(
@@ -155,7 +167,14 @@ impl App {
                 )
             }
             View::MrDetails | View::MrDiff | View::MrNotes => {
-                let iid = number(c.mr.as_ref().ok_or("MR не выбран")?, "iid");
+                let iid = number(
+                    c.mr.as_ref().ok_or(
+                        self.state
+                            .language
+                            .text("No merge request selected", "MR не выбран"),
+                    )?,
+                    "iid",
+                );
                 let base = format!("projects/{}/merge_requests/{iid}", project()?);
                 match c.view {
                     View::MrDiff => format!("{base}/diffs?{page}"),
@@ -177,13 +196,27 @@ impl App {
             View::Jobs => format!(
                 "projects/{}/pipelines/{}/jobs?{page}&include_retried=false",
                 project()?,
-                number(c.pipeline.as_ref().ok_or("Пайплайн не выбран")?, "id")
+                number(
+                    c.pipeline.as_ref().ok_or(
+                        self.state
+                            .language
+                            .text("No pipeline selected", "Пайплайн не выбран")
+                    )?,
+                    "id"
+                )
             ),
             View::Trace => {
                 return Ok(Request::text(format!(
                     "projects/{}/jobs/{}/trace",
                     project()?,
-                    number(c.job.as_ref().ok_or("Джоба не выбрана")?, "id")
+                    number(
+                        c.job.as_ref().ok_or(
+                            self.state
+                                .language
+                                .text("No job selected", "Джоба не выбрана")
+                        )?,
+                        "id"
+                    )
                 )));
             }
         };
@@ -235,9 +268,29 @@ impl App {
             self.state.scroll = previous.scroll;
             self.state.scroll_x = previous.scroll_x;
             self.can_next = previous.can_next;
-            self.state.status = "Назад · F5 обновить данные".into();
+            self.localize_cached_text();
+            self.state.status = self
+                .state
+                .language
+                .text("Back · F5 to refresh", "Назад · F5 обновить данные")
+                .into();
         }
         Vec::new()
+    }
+
+    fn localize_cached_text(&mut self) {
+        let response = match self.state.context.view {
+            View::MrDetails if self.state.object.is_object() => {
+                Some(Response::Json(self.state.object.clone()))
+            }
+            View::MrDiff | View::MrNotes => {
+                Some(Response::Json(Value::Array(self.state.rows.clone())))
+            }
+            _ => None,
+        };
+        if let Some(response) = response {
+            let _ = self.apply(response);
+        }
     }
 
     fn project_view(&mut self, view: View) -> Vec<Effect> {
@@ -247,7 +300,15 @@ impl App {
                 .selected()
                 .is_some_and(|row| row["_unavailable"] == true)
         {
-            self.state.error = Some("Проект недоступен. * — убрать его из избранного".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "Project unavailable. Press * to remove it from favorites",
+                        "Проект недоступен. * — убрать его из избранного",
+                    )
+                    .into(),
+            );
             return Vec::new();
         }
         if self.state.project_id().is_none() {
@@ -261,7 +322,12 @@ impl App {
                 };
                 return self.navigate(context);
             }
-            self.state.error = Some("Выберите и откройте проект".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text("Select and open a project", "Выберите и откройте проект")
+                    .into(),
+            );
             return Vec::new();
         }
         let context = Context {
@@ -276,7 +342,14 @@ impl App {
         self.state.sidebar_selected = index;
         if index == 4 {
             self.state.popup = Some(Popup::Input {
-                title: "Сервер GitLab · hostname[:port]".into(),
+                title: self
+                    .state
+                    .language
+                    .text(
+                        "GitLab server · hostname[:port]",
+                        "Сервер GitLab · hostname[:port]",
+                    )
+                    .into(),
                 value: self.state.host.clone(),
                 purpose: InputPurpose::Host,
             });
@@ -308,7 +381,15 @@ impl App {
             return Vec::new();
         };
         if row["_unavailable"] == true {
-            self.state.error = Some("Проект недоступен. * — убрать его из избранного".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "Project unavailable. Press * to remove it from favorites",
+                        "Проект недоступен. * — убрать его из избранного",
+                    )
+                    .into(),
+            );
             return Vec::new();
         }
         let mut c = self.state.context.clone();
@@ -341,7 +422,9 @@ impl App {
                         .and_then(Value::as_str)
                         .and_then(|r| r.split('!').next())
                         .map(str::to_owned)
-                        .unwrap_or_else(|| format!("Проект #{id}"));
+                        .unwrap_or_else(|| {
+                            crate::tr!(self.state.language, "Project #{id}", "Проект #{id}")
+                        });
                     c.project = Some(json!({"id":id,"name":name,"path_with_namespace":name}));
                 }
                 c.mr = Some(row);
@@ -406,7 +489,11 @@ impl App {
             return Vec::new();
         }
         if next && !self.can_next {
-            self.state.status = "Последняя страница".into();
+            self.state.status = self
+                .state
+                .language
+                .text("Last page", "Последняя страница")
+                .into();
             return Vec::new();
         }
         let page = self.state.context.page;
@@ -465,9 +552,18 @@ impl App {
         if let Some((position, column)) = position {
             self.state.scroll = position.min(u16::MAX as usize) as u16;
             self.state.scroll_x = column.saturating_sub(8);
-            self.state.status = format!("Найдено совпадений: {}", positions.len());
+            self.state.status = crate::tr!(
+                self.state.language,
+                "Matches found: {}",
+                "Найдено совпадений: {}",
+                positions.len()
+            );
         } else {
-            self.state.status = "Совпадений нет".into();
+            self.state.status = self
+                .state
+                .language
+                .text("No matches", "Совпадений нет")
+                .into();
         }
     }
 
@@ -492,16 +588,35 @@ impl App {
                     .unwrap_or(0),
             );
         if level < 40 {
-            self.state.error =
-                Some("Для редактирования требуется роль Maintainer или Owner".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "Editing requires the Maintainer or Owner role",
+                        "Для редактирования требуется роль Maintainer или Owner",
+                    )
+                    .into(),
+            );
             return Vec::new();
         }
         let Some(value) = self.state.object.get(setting.key).filter(|v| !v.is_null()) else {
-            self.state.error = Some("Сервер не предоставил это поле".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "The server did not provide this field",
+                        "Сервер не предоставил это поле",
+                    )
+                    .into(),
+            );
             return Vec::new();
         };
         self.state.popup = Some(Popup::Input {
-            title: format!("{} · {}", setting.label, setting.help),
+            title: format!(
+                "{} · {}",
+                setting.label_in(self.state.language),
+                setting.help_in(self.state.language)
+            ),
             value: value_label(value),
             purpose: InputPurpose::Setting(self.state.selected),
         });
@@ -510,7 +625,7 @@ impl App {
 
     fn confirm_setting(&mut self, index: usize, input: String) -> Vec<Effect> {
         let setting = SETTINGS[index];
-        let value = match setting.parse(&input) {
+        let value = match setting.parse_in(&input, self.state.language) {
             Ok(v) => v,
             Err(error) => {
                 self.state.error = Some(error);
@@ -528,10 +643,16 @@ impl App {
             .unwrap_or(Value::Null);
         if old == value {
             self.state.popup = None;
-            self.state.status = "Значение не изменилось".into();
+            self.state.status = self
+                .state
+                .language
+                .text("The value has not changed", "Значение не изменилось")
+                .into();
             return Vec::new();
         }
-        let body = format!(
+        let body = crate::tr!(
+            self.state.language,
+            "Project: {}\n\n{}\n\nBefore: {}\nAfter: {}\n\nOnly this field will be changed.",
             "Проект: {}\n\n{}\n\nБыло: {}\nСтало: {}\n\nБудет изменено только это поле.",
             self.state
                 .context
@@ -539,14 +660,18 @@ impl App {
                 .as_ref()
                 .map(|p| string(p, "path_with_namespace"))
                 .unwrap_or("—"),
-            setting.label,
+            setting.label_in(self.state.language),
             value_label(&old),
             value_label(&value)
         );
         let mut patch = serde_json::Map::new();
         patch.insert(setting.key.into(), value);
         self.state.popup = Some(Popup::Confirm {
-            title: "Сохранить настройку?".into(),
+            title: self
+                .state
+                .language
+                .text("Save setting?", "Сохранить настройку?")
+                .into(),
             body,
             request: Request::put(format!("projects/{project}"), Value::Object(patch)),
         });
@@ -572,26 +697,36 @@ impl App {
             return Vec::new();
         };
         if action == "play" && (entity != "jobs" || string(record, "status") != "manual") {
-            self.state.error = Some("Запуск доступен только для ручной джобы".into());
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "Only manual jobs can be started",
+                        "Запуск доступен только для ручной джобы",
+                    )
+                    .into(),
+            );
             return Vec::new();
         }
         let id = number(record, "id");
         let label = match action {
-            "retry" => "Повторить",
-            "cancel" => "Отменить",
-            _ => "Запустить",
+            "retry" => self.state.language.text("Retry", "Повторить"),
+            "cancel" => self.state.language.text("Cancel", "Отменить"),
+            _ => self.state.language.text("Play", "Запустить"),
         };
         let name = string(record, "name");
         self.state.popup = Some(Popup::Confirm {
             title: format!(
                 "{label} {} #{id}?",
                 if entity == "jobs" {
-                    "джобу"
+                    self.state.language.text("job", "джобу")
                 } else {
-                    "пайплайн"
+                    self.state.language.text("pipeline", "пайплайн")
                 }
             ),
-            body: format!(
+            body: crate::tr!(
+                self.state.language,
+                "Project: {}\nResource: {name} #{id}\nAction: {label}\n\nThis action will be sent to GitLab.",
                 "Проект: {}\nОбъект: {name} #{id}\nДействие: {label}\n\nДействие будет отправлено в GitLab.",
                 self.state
                     .context
@@ -636,7 +771,11 @@ impl App {
                 }
                 KeyCode::Esc | KeyCode::Char('n' | 'N' | 'q') => {
                     self.state.popup = None;
-                    self.state.status = "Действие отменено".into();
+                    self.state.status = self
+                        .state
+                        .language
+                        .text("Action canceled", "Действие отменено")
+                        .into();
                     Vec::new()
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -716,7 +855,8 @@ impl App {
                             }
                             InputPurpose::Host => {
                                 if let Err(error) = crate::api::validate_host(&value) {
-                                    self.state.error = Some(error);
+                                    self.state.error =
+                                        Some(self.state.language.error_message(&error));
                                     return Vec::new();
                                 }
                                 self.cancel();
@@ -766,12 +906,23 @@ impl App {
                     | KeyCode::PageDown
             )
         {
-            self.state.status =
-                "Ожидание результата изменения · выход не отменяет операцию на сервере".into();
+            self.state.status = self
+                .state
+                .language
+                .text(
+                    "Waiting for the change result · exiting does not cancel the server operation",
+                    "Ожидание результата изменения · выход не отменяет операцию на сервере",
+                )
+                .into();
             return Vec::new();
         }
         match key.code {
             KeyCode::Char('q') => vec![Effect::Exit],
+            KeyCode::Char('L') => {
+                self.state.language = self.state.language.toggle();
+                self.localize_cached_text();
+                vec![Effect::SavePreferences]
+            }
             KeyCode::Char('?') => {
                 self.state.popup_scroll = 0;
                 self.state.popup = Some(Popup::Help);
@@ -872,9 +1023,15 @@ impl App {
             KeyCode::Char('/') => {
                 self.state.popup = Some(Popup::Input {
                     title: if self.state.context.view == View::Pipelines {
-                        "Фильтр по точному имени ветки"
+                        self.state.language.text(
+                            "Filter by exact branch name",
+                            "Фильтр по точному имени ветки",
+                        )
                     } else {
-                        "Поиск · Enter применить, Ctrl+U очистить"
+                        self.state.language.text(
+                            "Search · Enter to apply, Ctrl+U to clear",
+                            "Поиск · Enter применить, Ctrl+U очистить",
+                        )
                     }
                     .into(),
                     value: self.state.context.query.clone(),
@@ -911,7 +1068,11 @@ impl App {
                     if !self.state.favorites.remove(&id) {
                         self.state.favorites.insert(id);
                     }
-                    self.state.status = "Избранное обновлено".into();
+                    self.state.status = self
+                        .state
+                        .language
+                        .text("Favorites updated", "Избранное обновлено")
+                        .into();
                     let mut effects = vec![Effect::SavePreferences];
                     if self.state.context.view == View::Favorites {
                         effects.extend(self.refresh());
@@ -945,16 +1106,21 @@ impl App {
         self.active = None;
         self.state.loading = false;
         match result {
-            Err(error) => {
+            Err(mut error) => {
+                error.message = self.state.language.error_message(&error.message);
                 if error.uncertain {
-                    self.after_load = Some(format!(
+                    self.after_load = Some(crate::tr!(
+                        self.state.language,
+                        "Change outcome unknown. Data reloaded; verify the result. {}",
                         "Результат изменения неизвестен. Данные перечитаны; сверьте состояние. {}",
                         error.message
                     ));
                     return self.refresh();
                 }
                 if let Some(warning) = self.after_load.take() {
-                    self.state.error = Some(format!(
+                    self.state.error = Some(crate::tr!(
+                        self.state.language,
+                        "{warning}\nReload failed: {}",
                         "{warning}\nПовторное чтение не удалось: {}",
                         error.message
                     ));
@@ -972,7 +1138,15 @@ impl App {
                         self.state.context.job = Some(value);
                     }
                 }
-                self.after_load = Some("Изменение применено. Данные обновлены.".into());
+                self.after_load = Some(
+                    self.state
+                        .language
+                        .text(
+                            "Change applied. Data refreshed.",
+                            "Изменение применено. Данные обновлены.",
+                        )
+                        .into(),
+                );
                 self.refresh()
             }
             Ok(response) => {
@@ -985,9 +1159,17 @@ impl App {
                     self.state.error = None;
                     self.state.status = self.after_load.take().unwrap_or_else(|| {
                         if self.state.context.view.is_text() {
-                            "Данные загружены · / поиск · R обновить".into()
+                            self.state
+                                .language
+                                .text(
+                                    "Data loaded · / search · R refresh",
+                                    "Данные загружены · / поиск · R обновить",
+                                )
+                                .into()
                         } else {
-                            format!(
+                            crate::tr!(
+                                self.state.language,
+                                "Page {} · {} records · [ / ] to change page",
                                 "Страница {} · {} записей · [ / ] перелистнуть",
                                 self.state.context.page,
                                 self.state.rows.len()
@@ -1006,18 +1188,30 @@ impl App {
             Response::Text { body, truncated } => {
                 self.state.text = body;
                 if truncated {
-                    self.notice("Текст сокращён: показаны первые 2 МиБ. R перечитать.");
+                    self.notice(self.state.language.text(
+                        "Text truncated: showing the first 2 MiB. R to reload.",
+                        "Текст сокращён: показаны первые 2 МиБ. R перечитать.",
+                    ));
                 }
             }
             Response::Json(value) => {
                 if matches!(view, View::Overview | View::Settings | View::MrDetails) {
                     if !value.is_object() {
-                        return Err("Сервер вернул неверный формат объекта".into());
+                        return Err(self
+                            .state
+                            .language
+                            .text(
+                                "The server returned an invalid object format",
+                                "Сервер вернул неверный формат объекта",
+                            )
+                            .into());
                     }
                     self.state.object = value.clone();
                     if view == View::MrDetails {
                         self.state.context.mr = Some(value.clone());
-                        self.state.text = format!(
+                        self.state.text = crate::tr!(
+                            self.state.language,
+                            "!{}  {}\n\n{} → {}\nStatus: {}\nAuthor: {}\n\n{}\n\n{}",
                             "!{}  {}\n\n{} → {}\nСтатус: {}\nАвтор: {}\n\n{}\n\n{}",
                             number(&value, "iid"),
                             string(&value, "title"),
@@ -1036,7 +1230,14 @@ impl App {
                     }
                 } else {
                     let Some(items) = value.as_array() else {
-                        return Err("Сервер вернул неверный формат списка".into());
+                        return Err(self
+                            .state
+                            .language
+                            .text(
+                                "The server returned an invalid list format",
+                                "Сервер вернул неверный формат списка",
+                            )
+                            .into());
                     };
                     self.can_next = items.len() == PAGE_SIZE;
                     self.state.rows = items.clone();
@@ -1048,7 +1249,10 @@ impl App {
                             string(row, "name").to_lowercase().contains(&query)
                                 || string(row, "status").to_lowercase().contains(&query)
                         });
-                        self.notice("Поиск применён к текущей странице; [ / ] меняют страницу");
+                        self.notice(self.state.language.text(
+                            "Search applies to the current page; [ / ] change page",
+                            "Поиск применён к текущей странице; [ / ] меняют страницу",
+                        ));
                     }
                     if view == View::MrDiff {
                         self.state.text = items
@@ -1062,7 +1266,10 @@ impl App {
                                         || file.get("collapsed").and_then(Value::as_bool)
                                             == Some(true)
                                     {
-                                        "[GitLab ограничил дифф этого файла]\n"
+                                        self.state.language.text(
+                                            "[GitLab limited the diff for this file]\n",
+                                            "[GitLab ограничил дифф этого файла]\n",
+                                        )
                                     } else {
                                         ""
                                     },
@@ -1089,7 +1296,11 @@ impl App {
                             .join("\n\n────────────────────────────────\n\n");
                     }
                     if self.state.rows.is_empty() && view.is_text() {
-                        self.state.text = "На этой странице данных нет".into();
+                        self.state.text = self
+                            .state
+                            .language
+                            .text("No data on this page", "На этой странице данных нет")
+                            .into();
                     }
                     self.state.selected = self
                         .state
@@ -1112,6 +1323,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Language;
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
@@ -1125,6 +1337,7 @@ mod tests {
     #[test]
     fn project_navigation_history_and_stale_response() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.refresh();
         finish(
             &mut app,
@@ -1141,6 +1354,7 @@ mod tests {
     #[test]
     fn settings_change_requires_confirmation_and_sends_one_field() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.state.context.view = View::Settings;
         app.state.context.project = Some(json!({"id":7,"path_with_namespace":"core/api"}));
         app.state.object =
@@ -1176,6 +1390,7 @@ mod tests {
     #[test]
     fn unknown_mutation_is_reconciled_by_get_not_repeated() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.state.context.view = View::Settings;
         app.state.context.project = Some(json!({"id":7}));
         app.fetch(Request::put("projects/7", json!({"description":"new"})));
@@ -1203,6 +1418,7 @@ mod tests {
     #[test]
     fn unicode_input_empty_lists_and_low_role_are_safe() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.key(enter());
         app.move_selection(100);
         assert_eq!(app.state.selected, 0);
@@ -1222,6 +1438,7 @@ mod tests {
     #[test]
     fn query_is_encoded_and_pagination_is_explicit() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.state.context.query = "a&owned=true".into();
         let Request::Json { endpoint, .. } = app.request().unwrap() else {
             panic!()
@@ -1236,6 +1453,7 @@ mod tests {
     #[test]
     fn long_line_search_end_and_history_use_logical_rows() {
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.state.context.view = View::File;
         app.state.text = format!("{}\n{}НАЙТИ\nпоследняя", "a".repeat(500), "界".repeat(60));
         app.state.context.query = "найти".into();
@@ -1270,6 +1488,7 @@ mod tests {
     fn unknown_result_notice_survives_filtered_or_truncated_refresh() {
         for view in [View::Jobs, View::Trace] {
             let mut app = App::new("example.org".into(), true);
+            app.state.language = Language::Ru;
             app.state.context.view = view;
             app.state.context.project = Some(json!({"id":7}));
             app.state.context.pipeline = Some(json!({"id":8}));
@@ -1304,6 +1523,7 @@ mod tests {
             }));
         }
         let mut app = App::new("example.org".into(), true);
+        app.state.language = Language::Ru;
         app.state.context.view = View::Favorites;
         app.state.rows = vec![json!({"id":7,"_unavailable":true})];
         app.state.favorites.insert(7);

@@ -1,8 +1,10 @@
+use crate::i18n::Language;
 use crate::model::{ApiError, Method, Request, Response, SETTINGS, value_label};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 pub(crate) struct Demo {
+    language: Language,
     projects: Vec<Value>,
     groups: Vec<Value>,
     mrs: Vec<Value>,
@@ -15,15 +17,15 @@ const CARGO: &str = "2222222222222222222222222222222222222222";
 const SOURCE: &str = "3333333333333333333333333333333333333333";
 
 impl Demo {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(language: Language) -> Self {
         let projects = [
-            (101, "api-gateway", "platform/core", "Единая точка входа для внутренних сервисов.", "rust"),
-            (102, "web-console", "products/console", "Панель управления продуктами.", "typescript"),
-            (103, "billing-service", "products/billing", "Счета, подписки и история оплат.", "rust"),
-            (104, "gitlab-runner", "platform/infrastructure", "Конфигурация раннеров и сборок.", "infra"),
-            (105, "design-system", "products/shared", "Компоненты интерфейса и темы.", "design"),
-            (106, "terraform-live", "platform/infrastructure", "Описание инфраструктуры.", "terraform"),
-            (107, "event-bus", "platform/core", "Доставка событий между сервисами.", "rust"),
+            (101, "api-gateway", "platform/core", language.text("A single entry point for internal services.", "Единая точка входа для внутренних сервисов."), "rust"),
+            (102, "web-console", "products/console", language.text("Product management console.", "Панель управления продуктами."), "typescript"),
+            (103, "billing-service", "products/billing", language.text("Invoices, subscriptions, and payment history.", "Счета, подписки и история оплат."), "rust"),
+            (104, "gitlab-runner", "platform/infrastructure", language.text("Runner and build configuration.", "Конфигурация раннеров и сборок."), "infra"),
+            (105, "design-system", "products/shared", language.text("UI components and themes.", "Компоненты интерфейса и темы."), "design"),
+            (106, "terraform-live", "platform/infrastructure", language.text("Infrastructure configuration.", "Описание инфраструктуры."), "terraform"),
+            (107, "event-bus", "platform/core", language.text("Event delivery between services.", "Доставка событий между сервисами."), "rust"),
         ].into_iter().map(|(id, name, namespace, description, topic)| json!({
             "id":id,"name":name,"path":name,"path_with_namespace":format!("{namespace}/{name}"),
             "name_with_namespace":format!("{namespace} / {name}"),"description":description,
@@ -44,12 +46,12 @@ impl Demo {
             "shared_runners_enabled":true,"build_timeout":3600,
         })).collect();
         let groups = vec![
-            json!({"id":1,"name":"Platform","path":"platform","full_path":"platform","description":"Общие сервисы и инфраструктура","visibility":"private","web_url":"https://gitlab.example.org/groups/platform"}),
-            json!({"id":2,"name":"Products","path":"products","full_path":"products","description":"Продуктовые команды","visibility":"private","web_url":"https://gitlab.example.org/groups/products"}),
+            json!({"id":1,"name":"Platform","path":"platform","full_path":"platform","description":language.text("Shared services and infrastructure", "Общие сервисы и инфраструктура"),"visibility":"private","web_url":"https://gitlab.example.org/groups/platform"}),
+            json!({"id":2,"name":"Products","path":"products","full_path":"products","description":language.text("Product teams", "Продуктовые команды"),"visibility":"private","web_url":"https://gitlab.example.org/groups/products"}),
         ];
         let mrs = vec![
-            json!({"id":501,"iid":42,"project_id":101,"title":"Уточнить повторы запросов к upstream","description":"Добавлен ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy","state":"opened","source_branch":"feat/retry-budget","target_branch":"main","draft":false,"merge_status":"can_be_merged","detailed_merge_status":"mergeable","author":{"name":"Igor Kramar","username":"ikramar"},"labels":["backend","review"],"created_at":"2026-10-27T08:10:00Z","updated_at":"2026-10-27T09:40:00Z","web_url":"https://gitlab.example.org/platform/core/api-gateway/-/merge_requests/42","changes_count":"2","head_pipeline":{"id":1842,"status":"success","ref":"feat/retry-budget"}}),
-            json!({"id":502,"iid":7,"project_id":102,"title":"Добавить страницу состояния сервисов","description":"Список сервисов, состояния и история последних проверок.","state":"opened","source_branch":"feat/status-page","target_branch":"main","draft":true,"merge_status":"unchecked","author":{"name":"Alex","username":"alex"},"labels":["frontend"],"created_at":"2026-10-27T07:20:00Z","updated_at":"2026-10-27T09:30:00Z","web_url":"https://gitlab.example.org/products/console/web-console/-/merge_requests/7","head_pipeline":{"id":1843,"status":"running","ref":"feat/status-page"}}),
+            json!({"id":501,"iid":42,"project_id":101,"title":language.text("Refine upstream retries", "Уточнить повторы запросов к upstream"),"description":language.text("Add a bounded retry budget and timeout checks.\n\n## Checks\n- cargo test\n- cargo clippy", "Добавлен ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy"),"state":"opened","source_branch":"feat/retry-budget","target_branch":"main","draft":false,"merge_status":"can_be_merged","detailed_merge_status":"mergeable","author":{"name":"Igor Kramar","username":"ikramar"},"labels":["backend","review"],"created_at":"2026-10-27T08:10:00Z","updated_at":"2026-10-27T09:40:00Z","web_url":"https://gitlab.example.org/platform/core/api-gateway/-/merge_requests/42","changes_count":"2","head_pipeline":{"id":1842,"status":"success","ref":"feat/retry-budget"}}),
+            json!({"id":502,"iid":7,"project_id":102,"title":language.text("Add a service status page", "Добавить страницу состояния сервисов"),"description":language.text("Services, current status, and recent check history.", "Список сервисов, состояния и история последних проверок."),"state":"opened","source_branch":"feat/status-page","target_branch":"main","draft":true,"merge_status":"unchecked","author":{"name":"Alex","username":"alex"},"labels":["frontend"],"created_at":"2026-10-27T07:20:00Z","updated_at":"2026-10-27T09:30:00Z","web_url":"https://gitlab.example.org/products/console/web-console/-/merge_requests/7","head_pipeline":{"id":1843,"status":"running","ref":"feat/status-page"}}),
         ];
         let pipelines = vec![
             json!({"id":1842,"iid":93,"project_id":101,"status":"success","ref":"main","sha":"7f3a91cb812db72aaa45b65f4c213930b25ea321","source":"push","created_at":"2026-10-27T09:40:00Z","updated_at":"2026-10-27T09:42:14Z","duration":134,"web_url":"https://gitlab.example.org/platform/core/api-gateway/-/pipelines/1842"}),
@@ -62,16 +64,21 @@ impl Demo {
                 "duration":duration,"ref":"main","allow_failure":false,
                 "pipeline":{"id":pipeline_id,"project_id":project_id,"ref":"main","status":status},
                 "runner":{"id":3,"description":"runner-03","runner_type":"instance_type"},
-                "commit":{"short_id":"7f3a91c","title":"Обновить обработку запросов"},
+                "commit":{"short_id":"7f3a91c","title":language.text("Update request handling", "Обновить обработку запросов")},
                 "created_at":"2026-10-27T09:40:00Z","web_url":format!("https://gitlab.example.org/projects/{project_id}/-/jobs/{id}")
             })).collect();
         Self {
+            language,
             projects,
             groups,
             mrs,
             pipelines,
             jobs,
         }
+    }
+
+    pub(crate) fn set_language(&mut self, language: Language) {
+        self.language = language;
     }
 
     pub(crate) fn execute(&mut self, request: &Request) -> Result<Response, ApiError> {
@@ -173,8 +180,8 @@ impl Demo {
             (Method::Get, []) if !text => Ok(Response::Json(project)),
             (Method::Get, ["repository", "branches"]) if !text => list(
                 vec![
-                    json!({"name":"main","default":true,"protected":true,"merged":false,"commit":{"short_id":"7f3a91c","title":"Обновить обработку запросов"}}),
-                    json!({"name":"feat/retry-budget","default":false,"protected":false,"merged":false,"commit":{"short_id":"c913bad","title":"Добавить бюджет повторов"}}),
+                    json!({"name":"main","default":true,"protected":true,"merged":false,"commit":{"short_id":"7f3a91c","title":self.language.text("Update request handling", "Обновить обработку запросов")}}),
+                    json!({"name":"feat/retry-budget","default":false,"protected":false,"merged":false,"commit":{"short_id":"c913bad","title":self.language.text("Add a retry budget", "Добавить бюджет повторов")}}),
                 ],
                 &params,
             ),
@@ -201,7 +208,7 @@ impl Demo {
             }
             (Method::Get, ["repository", "blobs", sha, "raw"]) if text => {
                 let body = match *sha {
-                    README => format!("# {}\n\n{}\n\n## Разработка\n\n```sh\ncargo test\ncargo clippy\n```\n", project["name"].as_str().unwrap_or_default(), project["description"].as_str().unwrap_or_default()),
+                    README => crate::tr!(self.language, "# {}\n\n{}\n\n## Development\n\n```sh\ncargo test\ncargo clippy\n```\n", "# {}\n\n{}\n\n## Разработка\n\n```sh\ncargo test\ncargo clippy\n```\n", project["name"].as_str().unwrap_or_default(), project["description"].as_str().unwrap_or_default()),
                     CARGO => format!("[package]\nname = \"{}\"\nversion = \"0.4.2\"\nedition = \"2024\"\n",project["path"].as_str().unwrap_or_default()),
                     SOURCE => "pub fn health() -> &'static str {\n    \"ok\"\n}\n\n#[test]\nfn service_is_healthy() {\n    assert_eq!(health(), \"ok\");\n}\n".into(),
                     _ => return Err(not_found()),
@@ -234,14 +241,14 @@ impl Demo {
                     [] => Ok(Response::Json(mr)),
                     ["diffs"] => list(
                         vec![
-                            json!({"old_path":"src/lib.rs","new_path":"src/lib.rs","new_file":false,"renamed_file":false,"deleted_file":false,"collapsed":false,"too_large":false,"diff":"@@ -1,3 +1,5 @@\n pub fn health() -> &'static str {\n-    \"starting\"\n+    \"ok\"\n }\n+\n+// Проверка сервиса проходит через общий маршрут.\n"}),
+                            json!({"old_path":"src/lib.rs","new_path":"src/lib.rs","new_file":false,"renamed_file":false,"deleted_file":false,"collapsed":false,"too_large":false,"diff":self.language.text("@@ -1,3 +1,5 @@\n pub fn health() -> &'static str {\n-    \"starting\"\n+    \"ok\"\n }\n+\n+// Check the service through the shared route.\n", "@@ -1,3 +1,5 @@\n pub fn health() -> &'static str {\n-    \"starting\"\n+    \"ok\"\n }\n+\n+// Проверка сервиса проходит через общий маршрут.\n")}),
                         ],
                         &params,
                     ),
                     ["notes"] => list(
                         vec![
-                            json!({"id":601,"body":"Добавлена проверка тайм-аутов. Можно смотреть.","system":false,"author":{"name":"Igor Kramar","username":"ikramar"},"created_at":"2026-10-27T09:20:00Z"}),
-                            json!({"id":602,"body":"Спасибо, поведение upstream теперь понятно.","system":false,"author":{"name":"Alex","username":"alex"},"created_at":"2026-10-27T09:35:00Z"}),
+                            json!({"id":601,"body":self.language.text("Timeout checks added. Ready for review.", "Добавлена проверка тайм-аутов. Можно смотреть."),"system":false,"author":{"name":"Igor Kramar","username":"ikramar"},"created_at":"2026-10-27T09:20:00Z"}),
+                            json!({"id":602,"body":self.language.text("Thanks, the upstream behavior is clear now.", "Спасибо, поведение upstream теперь понятно."),"system":false,"author":{"name":"Alex","username":"alex"},"created_at":"2026-10-27T09:35:00Z"}),
                         ],
                         &params,
                     ),
@@ -482,7 +489,7 @@ mod tests {
     }
     #[test]
     fn routes_isolate_projects_and_support_navigation() {
-        let mut demo = Demo::new();
+        let mut demo = Demo::new(Language::En);
         let projects = json(
             demo.execute(&Request::get("projects?simple=true&per_page=1&page=2"))
                 .unwrap(),
@@ -546,7 +553,7 @@ mod tests {
     }
     #[test]
     fn mutations_change_only_selected_field_and_selected_ci_resource() {
-        let mut demo = Demo::new();
+        let mut demo = Demo::new(Language::En);
         let mut before = json(demo.execute(&Request::get("projects/101")).unwrap());
         let result = json(
             demo.execute(&Request::put(

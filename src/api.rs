@@ -1,5 +1,6 @@
 use crate::{
     demo::Demo,
+    i18n::Language,
     model::{ApiError, Method, Request, Response},
 };
 use serde_json::Value;
@@ -15,6 +16,7 @@ use std::{
 };
 
 pub struct Api {
+    language: Language,
     host: String,
     demo: Option<Demo>,
     program: PathBuf,
@@ -24,21 +26,44 @@ pub struct Api {
 
 impl Api {
     pub fn new(host: &str, demo: bool) -> Result<Self, ApiError> {
+        Self::new_in(host, demo, Language::En)
+    }
+
+    pub fn new_in(host: &str, demo: bool, language: Language) -> Result<Self, ApiError> {
         validate_host(host).map_err(|message| ApiError {
-            message,
+            message: language.error_message(&message),
             uncertain: false,
             http_status: None,
         })?;
         Ok(Self {
+            language,
             host: host.to_owned(),
-            demo: demo.then(Demo::new),
+            demo: demo.then(|| Demo::new(language)),
             program: "glab".into(),
             timeout: Duration::from_secs(20),
             output_limit: 2 * 1024 * 1024,
         })
     }
 
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+        if let Some(demo) = &mut self.demo {
+            demo.set_language(language);
+        }
+    }
+
     pub fn execute(
+        &mut self,
+        request: &Request,
+        cancel: &AtomicBool,
+    ) -> Result<Response, ApiError> {
+        self.execute_inner(request, cancel).map_err(|mut error| {
+            error.message = self.language.error_message(&error.message);
+            error
+        })
+    }
+
+    fn execute_inner(
         &mut self,
         request: &Request,
         cancel: &AtomicBool,
@@ -63,7 +88,13 @@ impl Api {
                         || std::str::from_utf8(&captured.stdout.bytes).is_err())
                 {
                     return Ok(Response::Text {
-                        body: "Бинарный файл: просмотр содержимого в терминале отключён.".into(),
+                        body: self
+                            .language
+                            .text(
+                                "Binary file: content preview is disabled in the terminal.",
+                                "Бинарный файл: просмотр содержимого в терминале отключён.",
+                            )
+                            .into(),
                         truncated: captured.stdout.truncated,
                     });
                 }
@@ -85,7 +116,7 @@ impl Api {
                     let value = match response {
                         Ok(Response::Json(value)) => value,
                         Err(error) if matches!(error.http_status, Some(403 | 404)) => {
-                            serde_json::json!({"id":id,"name":format!("Недоступен #{id}"),"path_with_namespace":"* — убрать из избранного","_unavailable":true})
+                            serde_json::json!({"id":id,"name":crate::tr!(self.language,"Unavailable #{id}","Недоступен #{id}"),"path_with_namespace":self.language.text("* — remove from favorites","* — убрать из избранного"),"_unavailable":true})
                         }
                         Err(error) => return Err(error),
                         _ => unreachable!(),
@@ -502,7 +533,7 @@ mod tests {
             Self { directory, path }
         }
         fn client(&self) -> Api {
-            let mut api = Api::new("gitlab.example.org", false).unwrap();
+            let mut api = Api::new_in("gitlab.example.org", false, Language::Ru).unwrap();
             api.program = self.path.clone();
             api.timeout = Duration::from_secs(2);
             api

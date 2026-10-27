@@ -1,9 +1,9 @@
 [package]
 name = "gitlab-deck"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Igor Kramar <i@ikramar.ru>"]
-description = "Самостоятельный терминальный клиент GitLab"
+description = "A standalone terminal client for GitLab"
 repository = "https://github.com/IgorKramar/gitlab-deck"
 homepage = "https://github.com/IgorKramar/gitlab-deck"
 readme = "README.md"
