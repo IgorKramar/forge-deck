@@ -194,6 +194,7 @@ pub enum Popup {
 
 #[derive(Clone, Debug)]
 pub struct State {
+    pub language: crate::i18n::Language,
     pub host: String,
     pub demo: bool,
     pub context: Context,
@@ -217,6 +218,7 @@ pub struct State {
 impl State {
     pub fn new(host: String, demo: bool) -> Self {
         Self {
+            language: crate::i18n::Language::En,
             host,
             demo,
             context: Context::default(),
