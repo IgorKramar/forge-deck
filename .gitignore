@@ -1,0 +1,8 @@
+/target/
+/.local/
+*.log
+
+# Локальные рабочие записи
+/docs/plans/
+/docs/verification.md
+/docs/solutions/

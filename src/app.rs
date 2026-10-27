@@ -1,0 +1,1315 @@
+use crate::model::*;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use serde_json::{Value, json};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+pub enum Effect {
+    Fetch {
+        id: u64,
+        request: Request,
+        cancel: Arc<AtomicBool>,
+    },
+    SavePreferences,
+    HostChanged,
+    Exit,
+}
+
+#[derive(Clone)]
+struct Snapshot {
+    context: Context,
+    rows: Vec<Value>,
+    object: Value,
+    text: String,
+    selected: usize,
+    scroll: u16,
+    scroll_x: u16,
+    can_next: bool,
+}
+
+pub struct App {
+    pub state: State,
+    history: Vec<Snapshot>,
+    generation: u64,
+    active: Option<(Arc<AtomicBool>, bool)>,
+    can_next: bool,
+    after_load: Option<String>,
+}
+
+impl App {
+    pub fn new(host: String, demo: bool) -> Self {
+        Self {
+            state: State::new(host, demo),
+            history: Vec::new(),
+            generation: 0,
+            active: None,
+            can_next: false,
+            after_load: None,
+        }
+    }
+
+    pub fn cancel(&mut self) {
+        if let Some((token, _)) = self.active.take() {
+            token.store(true, Ordering::Relaxed);
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.state.loading = false;
+    }
+
+    pub fn mutation_pending(&self) -> bool {
+        self.active.as_ref().is_some_and(|(_, mutation)| *mutation)
+    }
+
+    fn fetch(&mut self, request: Request) -> Vec<Effect> {
+        self.cancel();
+        let token = Arc::new(AtomicBool::new(false));
+        self.active = Some((token.clone(), request.is_mutation()));
+        self.state.loading = true;
+        self.state.error = None;
+        self.state.status = if request.is_mutation() {
+            "Отправка изменения…"
+        } else {
+            "Загрузка…"
+        }
+        .into();
+        vec![Effect::Fetch {
+            id: self.generation,
+            request,
+            cancel: token,
+        }]
+    }
+
+    pub fn refresh(&mut self) -> Vec<Effect> {
+        match self.request() {
+            Ok(request) => self.fetch(request),
+            Err(error) => {
+                self.state.error = Some(error);
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn request(&self) -> Result<Request, String> {
+        let c = &self.state.context;
+        let page = format!("per_page={PAGE_SIZE}&page={}", c.page);
+        let search = encode(&c.query);
+        let project = || {
+            self.state
+                .project_id()
+                .ok_or_else(|| "Сначала выберите проект".to_owned())
+        };
+        let list = match c.view {
+            View::Projects => match &c.group {
+                Some(group) => format!(
+                    "groups/{}/projects?{page}&include_subgroups=true&with_shared=false&simple=true&order_by=last_activity_at&sort=desc&search={search}",
+                    number(group, "id")
+                ),
+                None => format!(
+                    "projects?{page}&simple=true&order_by=last_activity_at&sort=desc&search={search}"
+                ),
+            },
+            View::Groups => {
+                format!("groups?{page}&all_available=true&order_by=name&sort=asc&search={search}")
+            }
+            View::Favorites => {
+                return Ok(Request::Projects(
+                    self.state.favorites.iter().copied().collect(),
+                ));
+            }
+            View::Overview | View::Settings => format!("projects/{}", project()?),
+            View::Repository => {
+                let branch = c
+                    .project
+                    .as_ref()
+                    .map(|p| string(p, "default_branch"))
+                    .filter(|s| *s != "—")
+                    .unwrap_or("HEAD");
+                format!(
+                    "projects/{}/repository/tree?{page}&path={}&ref={}",
+                    project()?,
+                    encode(&c.path),
+                    encode(branch)
+                )
+            }
+            View::File => {
+                return Ok(Request::text(format!(
+                    "projects/{}/repository/blobs/{}/raw",
+                    project()?,
+                    encode(string(c.file.as_ref().ok_or("Файл не выбран")?, "id"))
+                )));
+            }
+            View::Branches => format!(
+                "projects/{}/repository/branches?{page}&search={search}",
+                project()?
+            ),
+            View::MergeRequests => {
+                let prefix = self
+                    .state
+                    .project_id()
+                    .map(|id| format!("projects/{id}/"))
+                    .unwrap_or_default();
+                format!(
+                    "{prefix}merge_requests?{page}&state=opened&scope=all&order_by=updated_at&sort=desc&search={search}"
+                )
+            }
+            View::MrDetails | View::MrDiff | View::MrNotes => {
+                let iid = number(c.mr.as_ref().ok_or("MR не выбран")?, "iid");
+                let base = format!("projects/{}/merge_requests/{iid}", project()?);
+                match c.view {
+                    View::MrDiff => format!("{base}/diffs?{page}"),
+                    View::MrNotes => format!("{base}/notes?{page}&sort=asc&order_by=created_at"),
+                    _ => base,
+                }
+            }
+            View::Pipelines => {
+                let filter = if c.query.is_empty() {
+                    String::new()
+                } else {
+                    format!("&ref={search}")
+                };
+                format!(
+                    "projects/{}/pipelines?{page}&order_by=id&sort=desc{filter}",
+                    project()?
+                )
+            }
+            View::Jobs => format!(
+                "projects/{}/pipelines/{}/jobs?{page}&include_retried=false",
+                project()?,
+                number(c.pipeline.as_ref().ok_or("Пайплайн не выбран")?, "id")
+            ),
+            View::Trace => {
+                return Ok(Request::text(format!(
+                    "projects/{}/jobs/{}/trace",
+                    project()?,
+                    number(c.job.as_ref().ok_or("Джоба не выбрана")?, "id")
+                )));
+            }
+        };
+        Ok(Request::get(list))
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            context: self.state.context.clone(),
+            rows: self.state.rows.clone(),
+            object: self.state.object.clone(),
+            text: self.state.text.clone(),
+            selected: self.state.selected,
+            scroll: self.state.scroll,
+            scroll_x: self.state.scroll_x,
+            can_next: self.can_next,
+        }
+    }
+
+    fn navigate(&mut self, context: Context) -> Vec<Effect> {
+        if self.history.len() == 32 {
+            self.history.remove(0);
+        }
+        self.history.push(self.snapshot());
+        self.state.context = context;
+        self.state.rows.clear();
+        self.state.object = Value::Null;
+        self.state.text.clear();
+        self.state.selected = 0;
+        self.state.scroll = 0;
+        self.state.scroll_x = 0;
+        self.state.focus = Focus::Main;
+        self.state.popup = None;
+        self.can_next = false;
+        self.refresh()
+    }
+
+    fn back(&mut self) -> Vec<Effect> {
+        self.cancel();
+        self.state.error = None;
+        self.state.popup = None;
+        self.after_load = None;
+        if let Some(previous) = self.history.pop() {
+            self.state.context = previous.context;
+            self.state.rows = previous.rows;
+            self.state.object = previous.object;
+            self.state.text = previous.text;
+            self.state.selected = previous.selected;
+            self.state.scroll = previous.scroll;
+            self.state.scroll_x = previous.scroll_x;
+            self.can_next = previous.can_next;
+            self.state.status = "Назад · F5 обновить данные".into();
+        }
+        Vec::new()
+    }
+
+    fn project_view(&mut self, view: View) -> Vec<Effect> {
+        if self.state.context.view == View::Favorites
+            && self
+                .state
+                .selected()
+                .is_some_and(|row| row["_unavailable"] == true)
+        {
+            self.state.error = Some("Проект недоступен. * — убрать его из избранного".into());
+            return Vec::new();
+        }
+        if self.state.project_id().is_none() {
+            if matches!(self.state.context.view, View::Projects | View::Favorites)
+                && let Some(project) = self.state.selected().cloned()
+            {
+                let context = Context {
+                    view,
+                    project: Some(project),
+                    ..Context::default()
+                };
+                return self.navigate(context);
+            }
+            self.state.error = Some("Выберите и откройте проект".into());
+            return Vec::new();
+        }
+        let context = Context {
+            view,
+            project: self.state.context.project.clone(),
+            ..Context::default()
+        };
+        self.navigate(context)
+    }
+
+    fn global(&mut self, index: usize) -> Vec<Effect> {
+        self.state.sidebar_selected = index;
+        if index == 4 {
+            self.state.popup = Some(Popup::Input {
+                title: "Сервер GitLab · hostname[:port]".into(),
+                value: self.state.host.clone(),
+                purpose: InputPurpose::Host,
+            });
+            return Vec::new();
+        }
+        let view = match index {
+            1 => View::Groups,
+            2 => View::MergeRequests,
+            3 => View::Favorites,
+            _ => View::Projects,
+        };
+        self.navigate(Context {
+            view,
+            ..Context::default()
+        })
+    }
+
+    fn enter(&mut self) -> Vec<Effect> {
+        if self.state.focus == Focus::Sidebar {
+            return self.global(self.state.sidebar_selected);
+        }
+        if self.state.loading {
+            return Vec::new();
+        }
+        if self.state.context.view == View::Settings {
+            return self.edit_setting();
+        }
+        let Some(row) = self.state.selected().cloned() else {
+            return Vec::new();
+        };
+        if row["_unavailable"] == true {
+            self.state.error = Some("Проект недоступен. * — убрать его из избранного".into());
+            return Vec::new();
+        }
+        let mut c = self.state.context.clone();
+        c.page = 1;
+        c.query.clear();
+        match c.view {
+            View::Projects | View::Favorites => {
+                c.project = Some(row);
+                c.group = None;
+                c.view = View::Overview;
+            }
+            View::Groups => {
+                c.group = Some(row);
+                c.project = None;
+                c.view = View::Projects;
+            }
+            View::Pipelines => {
+                c.pipeline = Some(row);
+                c.view = View::Jobs;
+            }
+            View::Jobs => {
+                c.job = Some(row);
+                c.view = View::Trace;
+            }
+            View::MergeRequests => {
+                if c.project.is_none() {
+                    let id = number(&row, "project_id");
+                    let name = row
+                        .pointer("/references/full")
+                        .and_then(Value::as_str)
+                        .and_then(|r| r.split('!').next())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("Проект #{id}"));
+                    c.project = Some(json!({"id":id,"name":name,"path_with_namespace":name}));
+                }
+                c.mr = Some(row);
+                c.view = View::MrDetails;
+            }
+            View::Repository => {
+                if string(&row, "type") == "tree" {
+                    c.path = string(&row, "path").into();
+                } else {
+                    c.file = Some(row);
+                    c.view = View::File;
+                }
+            }
+            _ => return Vec::new(),
+        }
+        self.navigate(c)
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.state.focus == Focus::Sidebar {
+            self.state.sidebar_selected = self
+                .state
+                .sidebar_selected
+                .saturating_add_signed(delta)
+                .min(4);
+        } else if self.state.context.view.is_text()
+            || self.state.context.view == View::Overview
+            || self.state.focus == Focus::Details
+        {
+            self.state.scroll = self.state.scroll.saturating_add_signed(delta as i16);
+        } else {
+            let length = if self.state.context.view == View::Settings {
+                SETTINGS.len()
+            } else {
+                self.state.rows.len()
+            };
+            self.state.selected = self
+                .state
+                .selected
+                .saturating_add_signed(delta)
+                .min(length.saturating_sub(1));
+            self.state.scroll = 0;
+        }
+    }
+
+    fn page(&mut self, next: bool) -> Vec<Effect> {
+        if self.state.loading {
+            return Vec::new();
+        }
+        if !matches!(
+            self.state.context.view,
+            View::Projects
+                | View::Groups
+                | View::MergeRequests
+                | View::MrDiff
+                | View::MrNotes
+                | View::Pipelines
+                | View::Jobs
+                | View::Repository
+                | View::Branches
+        ) {
+            return Vec::new();
+        }
+        if next && !self.can_next {
+            self.state.status = "Последняя страница".into();
+            return Vec::new();
+        }
+        let page = self.state.context.page;
+        self.state.context.page = if next {
+            page.saturating_add(1)
+        } else {
+            page.saturating_sub(1).max(1)
+        };
+        if page == self.state.context.page {
+            return Vec::new();
+        }
+        self.state.selected = 0;
+        self.state.scroll = 0;
+        self.refresh()
+    }
+
+    fn text_search(&mut self, next: bool, from_start: bool) {
+        let query = self.state.context.query.to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let positions: Vec<(usize, u16)> = self
+            .state
+            .text
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let line = line.to_lowercase();
+                line.find(&query).map(|column| {
+                    (
+                        i,
+                        ratatui::text::Line::from(&line[..column])
+                            .width()
+                            .min(u16::MAX as usize) as u16,
+                    )
+                })
+            })
+            .collect();
+        let current = self.state.scroll as usize;
+        let position = if from_start {
+            positions.first().copied()
+        } else if next {
+            positions
+                .iter()
+                .copied()
+                .find(|(i, _)| *i > current)
+                .or_else(|| positions.first().copied())
+        } else {
+            positions
+                .iter()
+                .copied()
+                .rev()
+                .find(|(i, _)| *i < current)
+                .or_else(|| positions.last().copied())
+        };
+        if let Some((position, column)) = position {
+            self.state.scroll = position.min(u16::MAX as usize) as u16;
+            self.state.scroll_x = column.saturating_sub(8);
+            self.state.status = format!("Найдено совпадений: {}", positions.len());
+        } else {
+            self.state.status = "Совпадений нет".into();
+        }
+    }
+
+    fn edit_setting(&mut self) -> Vec<Effect> {
+        if self.state.loading {
+            return Vec::new();
+        }
+        let Some(setting) = SETTINGS.get(self.state.selected) else {
+            return Vec::new();
+        };
+        let level = self
+            .state
+            .object
+            .pointer("/permissions/project_access/access_level")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .max(
+                self.state
+                    .object
+                    .pointer("/permissions/group_access/access_level")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            );
+        if level < 40 {
+            self.state.error =
+                Some("Для редактирования требуется роль Maintainer или Owner".into());
+            return Vec::new();
+        }
+        let Some(value) = self.state.object.get(setting.key).filter(|v| !v.is_null()) else {
+            self.state.error = Some("Сервер не предоставил это поле".into());
+            return Vec::new();
+        };
+        self.state.popup = Some(Popup::Input {
+            title: format!("{} · {}", setting.label, setting.help),
+            value: value_label(value),
+            purpose: InputPurpose::Setting(self.state.selected),
+        });
+        Vec::new()
+    }
+
+    fn confirm_setting(&mut self, index: usize, input: String) -> Vec<Effect> {
+        let setting = SETTINGS[index];
+        let value = match setting.parse(&input) {
+            Ok(v) => v,
+            Err(error) => {
+                self.state.error = Some(error);
+                return Vec::new();
+            }
+        };
+        let Some(project) = self.state.project_id() else {
+            return Vec::new();
+        };
+        let old = self
+            .state
+            .object
+            .get(setting.key)
+            .cloned()
+            .unwrap_or(Value::Null);
+        if old == value {
+            self.state.popup = None;
+            self.state.status = "Значение не изменилось".into();
+            return Vec::new();
+        }
+        let body = format!(
+            "Проект: {}\n\n{}\n\nБыло: {}\nСтало: {}\n\nБудет изменено только это поле.",
+            self.state
+                .context
+                .project
+                .as_ref()
+                .map(|p| string(p, "path_with_namespace"))
+                .unwrap_or("—"),
+            setting.label,
+            value_label(&old),
+            value_label(&value)
+        );
+        let mut patch = serde_json::Map::new();
+        patch.insert(setting.key.into(), value);
+        self.state.popup = Some(Popup::Confirm {
+            title: "Сохранить настройку?".into(),
+            body,
+            request: Request::put(format!("projects/{project}"), Value::Object(patch)),
+        });
+        self.state.popup_scroll = 0;
+        Vec::new()
+    }
+
+    fn ci_action(&mut self, action: &str) -> Vec<Effect> {
+        if self.state.loading {
+            return Vec::new();
+        }
+        let Some(project) = self.state.project_id() else {
+            return Vec::new();
+        };
+        let view = self.state.context.view;
+        let (entity, record) = match view {
+            View::Pipelines => ("pipelines", self.state.selected()),
+            View::Jobs => ("jobs", self.state.selected()),
+            View::Trace => ("jobs", self.state.context.job.as_ref()),
+            _ => return Vec::new(),
+        };
+        let Some(record) = record else {
+            return Vec::new();
+        };
+        if action == "play" && (entity != "jobs" || string(record, "status") != "manual") {
+            self.state.error = Some("Запуск доступен только для ручной джобы".into());
+            return Vec::new();
+        }
+        let id = number(record, "id");
+        let label = match action {
+            "retry" => "Повторить",
+            "cancel" => "Отменить",
+            _ => "Запустить",
+        };
+        let name = string(record, "name");
+        self.state.popup = Some(Popup::Confirm {
+            title: format!(
+                "{label} {} #{id}?",
+                if entity == "jobs" {
+                    "джобу"
+                } else {
+                    "пайплайн"
+                }
+            ),
+            body: format!(
+                "Проект: {}\nОбъект: {name} #{id}\nДействие: {label}\n\nДействие будет отправлено в GitLab.",
+                self.state
+                    .context
+                    .project
+                    .as_ref()
+                    .map(|p| string(p, "path_with_namespace"))
+                    .unwrap_or("—")
+            ),
+            request: Request::post(format!("projects/{project}/{entity}/{id}/{action}")),
+        });
+        self.state.popup_scroll = 0;
+        Vec::new()
+    }
+
+    fn popup_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        let Some(popup) = self.state.popup.clone() else {
+            return Vec::new();
+        };
+        match popup {
+            Popup::Help => {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.state.popup_scroll = self.state.popup_scroll.saturating_add(1)
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.state.popup_scroll = self.state.popup_scroll.saturating_sub(1)
+                    }
+                    KeyCode::PageDown => {
+                        self.state.popup_scroll = self.state.popup_scroll.saturating_add(8)
+                    }
+                    KeyCode::PageUp => {
+                        self.state.popup_scroll = self.state.popup_scroll.saturating_sub(8)
+                    }
+                    _ => self.state.popup = None,
+                }
+                Vec::new()
+            }
+            Popup::Confirm { request, .. } => match key.code {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                    self.state.popup = None;
+                    self.fetch(request)
+                }
+                KeyCode::Esc | KeyCode::Char('n' | 'N' | 'q') => {
+                    self.state.popup = None;
+                    self.state.status = "Действие отменено".into();
+                    Vec::new()
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.state.popup_scroll = self.state.popup_scroll.saturating_add(1);
+                    Vec::new()
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.state.popup_scroll = self.state.popup_scroll.saturating_sub(1);
+                    Vec::new()
+                }
+                _ => Vec::new(),
+            },
+            Popup::Input {
+                title,
+                mut value,
+                purpose,
+            } => {
+                match key.code {
+                    KeyCode::Left | KeyCode::Right
+                        if matches!(purpose, InputPurpose::Setting(_)) =>
+                    {
+                        if let InputPurpose::Setting(index) = purpose {
+                            let choices = match SETTINGS[index].kind {
+                                SettingKind::Choice(v) => v,
+                                SettingKind::Bool => &["false", "true"],
+                                _ => &[],
+                            };
+                            if !choices.is_empty() {
+                                let i = choices.iter().position(|v| *v == value).unwrap_or(0);
+                                let next = if key.code == KeyCode::Right {
+                                    (i + 1) % choices.len()
+                                } else {
+                                    (i + choices.len() - 1) % choices.len()
+                                };
+                                value = choices[next].into();
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.state.popup = None;
+                        return Vec::new();
+                    }
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        value.clear()
+                    }
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                            && !c.is_control() =>
+                    {
+                        if value.chars().count() < 4096 {
+                            value.push(c);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        self.state.error = None;
+                        match purpose {
+                            InputPurpose::Setting(index) => {
+                                return self.confirm_setting(index, value);
+                            }
+                            InputPurpose::Search => {
+                                self.state.popup = None;
+                                self.state.context.query = value;
+                                if self.state.context.view.is_text() {
+                                    self.state.scroll = 0;
+                                    self.state.scroll_x = 0;
+                                    self.text_search(true, true);
+                                    return Vec::new();
+                                }
+                                self.state.context.page = 1;
+                                self.state.selected = 0;
+                                return self.refresh();
+                            }
+                            InputPurpose::Host => {
+                                if let Err(error) = crate::api::validate_host(&value) {
+                                    self.state.error = Some(error);
+                                    return Vec::new();
+                                }
+                                self.cancel();
+                                self.history.clear();
+                                self.state.popup = None;
+                                self.state.host = value;
+                                self.state.context = Context::default();
+                                self.state.rows.clear();
+                                self.state.text.clear();
+                                self.state.object = Value::Null;
+                                self.state.selected = 0;
+                                self.state.scroll = 0;
+                                self.state.scroll_x = 0;
+                                self.state.sidebar_selected = 0;
+                                let mut effects = vec![Effect::HostChanged];
+                                effects.extend(self.refresh());
+                                return effects;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                self.state.popup = Some(Popup::Input {
+                    title,
+                    value,
+                    purpose,
+                });
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return vec![Effect::Exit];
+        }
+        if self.state.popup.is_some() {
+            return self.popup_key(key);
+        }
+        if self.mutation_pending()
+            && !matches!(
+                key.code,
+                KeyCode::Char('q' | '?' | 'j' | 'k')
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        {
+            self.state.status =
+                "Ожидание результата изменения · выход не отменяет операцию на сервере".into();
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Char('q') => vec![Effect::Exit],
+            KeyCode::Char('?') => {
+                self.state.popup_scroll = 0;
+                self.state.popup = Some(Popup::Help);
+                Vec::new()
+            }
+            KeyCode::Tab => {
+                self.state.focus = match self.state.focus {
+                    Focus::Sidebar => Focus::Main,
+                    Focus::Main => Focus::Details,
+                    Focus::Details => Focus::Sidebar,
+                };
+                Vec::new()
+            }
+            KeyCode::BackTab => {
+                self.state.focus = match self.state.focus {
+                    Focus::Sidebar => Focus::Details,
+                    Focus::Main => Focus::Sidebar,
+                    Focus::Details => Focus::Main,
+                };
+                Vec::new()
+            }
+            KeyCode::Esc | KeyCode::Backspace => self.back(),
+            KeyCode::Enter => self.enter(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.move_selection(1);
+                Vec::new()
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.move_selection(-1);
+                Vec::new()
+            }
+            KeyCode::PageDown => {
+                self.move_selection(10);
+                Vec::new()
+            }
+            KeyCode::PageUp => {
+                self.move_selection(-10);
+                Vec::new()
+            }
+            KeyCode::Home => {
+                self.state.selected = 0;
+                self.state.scroll = 0;
+                self.state.scroll_x = 0;
+                Vec::new()
+            }
+            KeyCode::End => {
+                if self.state.context.view.is_text() {
+                    self.state.scroll = self
+                        .state
+                        .text
+                        .lines()
+                        .count()
+                        .saturating_sub(1)
+                        .min(u16::MAX as usize) as u16;
+                } else if self.state.context.view == View::Settings {
+                    self.state.selected = SETTINGS.len() - 1;
+                } else {
+                    self.state.selected = self.state.rows.len().saturating_sub(1);
+                }
+                Vec::new()
+            }
+            KeyCode::Char('1') => self.global(0),
+            KeyCode::Left | KeyCode::Right if self.state.context.view.is_text() => {
+                self.state.scroll_x = self
+                    .state
+                    .scroll_x
+                    .saturating_add_signed(if key.code == KeyCode::Right { 8 } else { -8 });
+                Vec::new()
+            }
+            KeyCode::Char('2') => self.global(1),
+            KeyCode::Char('3') => self.global(2),
+            KeyCode::Char('H') => self.global(4),
+            KeyCode::Char('o') => self.project_view(View::Overview),
+            KeyCode::Char('p') => self.project_view(View::Pipelines),
+            KeyCode::Char('m') => self.project_view(View::MergeRequests),
+            KeyCode::Char('b') => self.project_view(View::Branches),
+            KeyCode::Char('f') => self.project_view(View::Repository),
+            KeyCode::Char('s') => self.project_view(View::Settings),
+            KeyCode::Char('d') if self.state.context.mr.is_some() => {
+                let mut c = self.state.context.clone();
+                c.view = View::MrDiff;
+                c.page = 1;
+                c.query.clear();
+                self.navigate(c)
+            }
+            KeyCode::Char('c') if self.state.context.mr.is_some() => {
+                let mut c = self.state.context.clone();
+                c.view = View::MrNotes;
+                c.page = 1;
+                c.query.clear();
+                self.navigate(c)
+            }
+            KeyCode::Char('R') | KeyCode::F(5) => self.refresh(),
+            KeyCode::Char('r') => self.ci_action("retry"),
+            KeyCode::Char('x') => self.ci_action("cancel"),
+            KeyCode::Char('S') => self.ci_action("play"),
+            KeyCode::Char('e') if self.state.context.view == View::Settings => self.edit_setting(),
+            KeyCode::Char('/') => {
+                self.state.popup = Some(Popup::Input {
+                    title: if self.state.context.view == View::Pipelines {
+                        "Фильтр по точному имени ветки"
+                    } else {
+                        "Поиск · Enter применить, Ctrl+U очистить"
+                    }
+                    .into(),
+                    value: self.state.context.query.clone(),
+                    purpose: InputPurpose::Search,
+                });
+                Vec::new()
+            }
+            KeyCode::Char('n') => {
+                if self.state.context.view.is_text() {
+                    self.text_search(true, false);
+                    Vec::new()
+                } else {
+                    self.page(true)
+                }
+            }
+            KeyCode::Char('N') => {
+                if self.state.context.view.is_text() {
+                    self.text_search(false, false);
+                    Vec::new()
+                } else {
+                    self.page(false)
+                }
+            }
+            KeyCode::Char(']') => self.page(true),
+            KeyCode::Char('[') => self.page(false),
+            KeyCode::Char('*') => {
+                let project = if matches!(self.state.context.view, View::Projects | View::Favorites)
+                {
+                    self.state.selected()
+                } else {
+                    self.state.context.project.as_ref()
+                };
+                if let Some(id) = project.map(|p| number(p, "id")).filter(|id| *id > 0) {
+                    if !self.state.favorites.remove(&id) {
+                        self.state.favorites.insert(id);
+                    }
+                    self.state.status = "Избранное обновлено".into();
+                    let mut effects = vec![Effect::SavePreferences];
+                    if self.state.context.view == View::Favorites {
+                        effects.extend(self.refresh());
+                    }
+                    effects
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn paste(&mut self, text: &str) {
+        if let Some(Popup::Input { value, purpose, .. }) = &mut self.state.popup {
+            let description = matches!(purpose, InputPurpose::Setting(index) if SETTINGS[*index].key == "description");
+            let room = 4096usize.saturating_sub(value.chars().count());
+            value.extend(
+                text.chars()
+                    .filter(|c| !c.is_control() || (description && matches!(c, '\n' | '\t')))
+                    .take(room),
+            );
+        }
+    }
+
+    pub fn accept(&mut self, id: u64, result: Result<Response, ApiError>) -> Vec<Effect> {
+        if id != self.generation {
+            return Vec::new();
+        }
+        let was_mutation = self.mutation_pending();
+        self.active = None;
+        self.state.loading = false;
+        match result {
+            Err(error) => {
+                if error.uncertain {
+                    self.after_load = Some(format!(
+                        "Результат изменения неизвестен. Данные перечитаны; сверьте состояние. {}",
+                        error.message
+                    ));
+                    return self.refresh();
+                }
+                if let Some(warning) = self.after_load.take() {
+                    self.state.error = Some(format!(
+                        "{warning}\nПовторное чтение не удалось: {}",
+                        error.message
+                    ));
+                } else {
+                    self.state.error = Some(error.message);
+                }
+                Vec::new()
+            }
+            Ok(response) if was_mutation => {
+                if let Response::Json(value) = response {
+                    if self.state.context.view == View::Settings {
+                        self.state.context.project = Some(value.clone());
+                        self.state.object = value;
+                    } else if self.state.context.view == View::Trace {
+                        self.state.context.job = Some(value);
+                    }
+                }
+                self.after_load = Some("Изменение применено. Данные обновлены.".into());
+                self.refresh()
+            }
+            Ok(response) => {
+                if let Err(error) = self.apply(response) {
+                    self.state.error = Some(match self.after_load.take() {
+                        Some(warning) => format!("{warning}\n{error}"),
+                        None => error,
+                    });
+                } else {
+                    self.state.error = None;
+                    self.state.status = self.after_load.take().unwrap_or_else(|| {
+                        if self.state.context.view.is_text() {
+                            "Данные загружены · / поиск · R обновить".into()
+                        } else {
+                            format!(
+                                "Страница {} · {} записей · [ / ] перелистнуть",
+                                self.state.context.page,
+                                self.state.rows.len()
+                            )
+                        }
+                    });
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    fn apply(&mut self, response: Response) -> Result<(), String> {
+        let view = self.state.context.view;
+        match response {
+            Response::Text { body, truncated } => {
+                self.state.text = body;
+                if truncated {
+                    self.notice("Текст сокращён: показаны первые 2 МиБ. R перечитать.");
+                }
+            }
+            Response::Json(value) => {
+                if matches!(view, View::Overview | View::Settings | View::MrDetails) {
+                    if !value.is_object() {
+                        return Err("Сервер вернул неверный формат объекта".into());
+                    }
+                    self.state.object = value.clone();
+                    if view == View::MrDetails {
+                        self.state.context.mr = Some(value.clone());
+                        self.state.text = format!(
+                            "!{}  {}\n\n{} → {}\nСтатус: {}\nАвтор: {}\n\n{}\n\n{}",
+                            number(&value, "iid"),
+                            string(&value, "title"),
+                            string(&value, "source_branch"),
+                            string(&value, "target_branch"),
+                            string(&value, "state"),
+                            value
+                                .pointer("/author/name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("—"),
+                            string(&value, "description"),
+                            string(&value, "web_url")
+                        );
+                    } else {
+                        self.state.context.project = Some(value);
+                    }
+                } else {
+                    let Some(items) = value.as_array() else {
+                        return Err("Сервер вернул неверный формат списка".into());
+                    };
+                    self.can_next = items.len() == PAGE_SIZE;
+                    self.state.rows = items.clone();
+                    if matches!(view, View::Jobs | View::Repository | View::Favorites)
+                        && !self.state.context.query.is_empty()
+                    {
+                        let query = self.state.context.query.to_lowercase();
+                        self.state.rows.retain(|row| {
+                            string(row, "name").to_lowercase().contains(&query)
+                                || string(row, "status").to_lowercase().contains(&query)
+                        });
+                        self.notice("Поиск применён к текущей странице; [ / ] меняют страницу");
+                    }
+                    if view == View::MrDiff {
+                        self.state.text = items
+                            .iter()
+                            .map(|file| {
+                                format!(
+                                    "diff --git a/{} b/{}\n{}{}",
+                                    string(file, "old_path"),
+                                    string(file, "new_path"),
+                                    if file.get("too_large").and_then(Value::as_bool) == Some(true)
+                                        || file.get("collapsed").and_then(Value::as_bool)
+                                            == Some(true)
+                                    {
+                                        "[GitLab ограничил дифф этого файла]\n"
+                                    } else {
+                                        ""
+                                    },
+                                    string(file, "diff")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                    }
+                    if view == View::MrNotes {
+                        self.state.text = items
+                            .iter()
+                            .map(|note| {
+                                format!(
+                                    "{} · {}\n{}",
+                                    note.pointer("/author/name")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("—"),
+                                    string(note, "created_at"),
+                                    string(note, "body")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n────────────────────────────────\n\n");
+                    }
+                    if self.state.rows.is_empty() && view.is_text() {
+                        self.state.text = "На этой странице данных нет".into();
+                    }
+                    self.state.selected = self
+                        .state
+                        .selected
+                        .min(self.state.rows.len().saturating_sub(1));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn notice(&mut self, message: &str) {
+        self.after_load = Some(match self.after_load.take() {
+            Some(existing) => format!("{existing} · {message}"),
+            None => message.into(),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+    fn enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+    fn finish(app: &mut App, value: Value) {
+        let id = app.generation;
+        app.accept(id, Ok(Response::Json(value)));
+    }
+    #[test]
+    fn project_navigation_history_and_stale_response() {
+        let mut app = App::new("example.org".into(), true);
+        app.refresh();
+        finish(
+            &mut app,
+            json!([{"id":7,"name":"api","path_with_namespace":"core/api"}]),
+        );
+        app.key(enter());
+        let stale = app.generation;
+        assert_eq!(app.state.context.view, View::Overview);
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.accept(stale, Ok(Response::Json(json!({"id":999}))));
+        assert_eq!(app.state.context.view, View::Projects);
+        assert_eq!(app.state.rows[0]["id"], 7);
+    }
+    #[test]
+    fn settings_change_requires_confirmation_and_sends_one_field() {
+        let mut app = App::new("example.org".into(), true);
+        app.state.context.view = View::Settings;
+        app.state.context.project = Some(json!({"id":7,"path_with_namespace":"core/api"}));
+        app.state.object =
+            json!({"description":"старое","permissions":{"project_access":{"access_level":40}}});
+        app.state.selected = 1;
+        assert!(app.key(key('e')).is_empty());
+        assert!(matches!(app.state.popup, Some(Popup::Input { .. })));
+        app.confirm_setting(1, "новое".into());
+        let Some(Popup::Confirm {
+            request: Request::Json {
+                body: Some(body), ..
+            },
+            ..
+        }) = &app.state.popup
+        else {
+            panic!("expected confirmation")
+        };
+        assert_eq!(body, &json!({"description":"новое"}));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.state.object["description"], "старое");
+        app.confirm_setting(1, "новое".into());
+        assert!(matches!(
+            app.key(key('y')).as_slice(),
+            [Effect::Fetch {
+                request: Request::Json {
+                    method: Method::Put,
+                    ..
+                },
+                ..
+            }]
+        ));
+    }
+    #[test]
+    fn unknown_mutation_is_reconciled_by_get_not_repeated() {
+        let mut app = App::new("example.org".into(), true);
+        app.state.context.view = View::Settings;
+        app.state.context.project = Some(json!({"id":7}));
+        app.fetch(Request::put("projects/7", json!({"description":"new"})));
+        let effects = app.accept(
+            app.generation,
+            Err(ApiError {
+                message: "Тайм-аут".into(),
+                uncertain: true,
+                http_status: None,
+            }),
+        );
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Fetch {
+                request: Request::Json {
+                    method: Method::Get,
+                    ..
+                },
+                ..
+            }]
+        ));
+        finish(&mut app, json!({"id":7,"description":"new"}));
+        assert!(app.state.status.contains("неизвестен"));
+    }
+    #[test]
+    fn unicode_input_empty_lists_and_low_role_are_safe() {
+        let mut app = App::new("example.org".into(), true);
+        app.key(enter());
+        app.move_selection(100);
+        assert_eq!(app.state.selected, 0);
+        app.state.popup = Some(Popup::Input {
+            title: "Поиск".into(),
+            value: "Омск".into(),
+            purpose: InputPurpose::Search,
+        });
+        app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(matches!(&app.state.popup,Some(Popup::Input{value,..}) if value=="Омс"));
+        app.state.popup = None;
+        app.state.context.view = View::Settings;
+        app.key(key('e'));
+        assert!(app.state.popup.is_none());
+        assert!(app.state.error.as_deref().unwrap().contains("Maintainer"));
+    }
+    #[test]
+    fn query_is_encoded_and_pagination_is_explicit() {
+        let mut app = App::new("example.org".into(), true);
+        app.state.context.query = "a&owned=true".into();
+        let Request::Json { endpoint, .. } = app.request().unwrap() else {
+            panic!()
+        };
+        assert!(endpoint.contains("search=a%26owned%3Dtrue"));
+        assert!(app.page(true).is_empty());
+        app.can_next = true;
+        app.page(true);
+        assert_eq!(app.state.context.page, 2);
+    }
+
+    #[test]
+    fn long_line_search_end_and_history_use_logical_rows() {
+        let mut app = App::new("example.org".into(), true);
+        app.state.context.view = View::File;
+        app.state.text = format!("{}\n{}НАЙТИ\nпоследняя", "a".repeat(500), "界".repeat(60));
+        app.state.context.query = "найти".into();
+        app.text_search(true, false);
+        assert_eq!(app.state.scroll, 1);
+        assert_eq!(app.state.scroll_x, 112);
+        app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(app.state.scroll, 2);
+        let previous = app.state.scroll_x;
+        app.key(key('1'));
+        app.back();
+        assert_eq!(app.state.scroll, 2);
+        assert_eq!(app.state.scroll_x, previous);
+        app.state.popup = Some(Popup::Input {
+            title: "Поиск".into(),
+            value: String::new(),
+            purpose: InputPurpose::Search,
+        });
+        app.key(enter());
+        assert_eq!(app.state.scroll, 0);
+        assert_eq!(app.state.scroll_x, 0);
+        app.state.popup = Some(Popup::Input {
+            title: "Поиск".into(),
+            value: "нет совпадений".into(),
+            purpose: InputPurpose::Search,
+        });
+        app.key(enter());
+        assert_eq!(app.state.scroll, 0);
+    }
+
+    #[test]
+    fn unknown_result_notice_survives_filtered_or_truncated_refresh() {
+        for view in [View::Jobs, View::Trace] {
+            let mut app = App::new("example.org".into(), true);
+            app.state.context.view = view;
+            app.state.context.project = Some(json!({"id":7}));
+            app.state.context.pipeline = Some(json!({"id":8}));
+            app.state.context.job = Some(json!({"id":9}));
+            app.state.context.query = "test".into();
+            app.fetch(Request::post("projects/7/jobs/9/retry"));
+            assert!(app.key(key('H')).is_empty());
+            assert!(app.key(key('R')).is_empty());
+            assert!(app.mutation_pending());
+            app.accept(
+                app.generation,
+                Err(ApiError {
+                    message: "Тайм-аут".into(),
+                    uncertain: true,
+                    http_status: None,
+                }),
+            );
+            let response = if view == View::Trace {
+                Response::Text {
+                    body: "test".into(),
+                    truncated: true,
+                }
+            } else {
+                Response::Json(json!([{"id":9,"name":"test"}]))
+            };
+            app.accept(app.generation, Ok(response));
+            assert!(app.state.status.contains("Результат изменения неизвестен"));
+            assert!(app.state.status.contains(if view == View::Trace {
+                "сокращён"
+            } else {
+                "текущей странице"
+            }));
+        }
+        let mut app = App::new("example.org".into(), true);
+        app.state.context.view = View::Favorites;
+        app.state.rows = vec![json!({"id":7,"_unavailable":true})];
+        app.state.favorites.insert(7);
+        assert!(app.key(enter()).is_empty());
+        assert_eq!(app.state.context.view, View::Favorites);
+        app.key(key('*'));
+        assert!(app.state.favorites.is_empty());
+    }
+}
