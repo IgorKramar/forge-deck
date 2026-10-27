@@ -1,3 +1,4 @@
+use crate::i18n::Language;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -24,22 +25,26 @@ pub enum View {
 
 impl View {
     pub fn title(self) -> &'static str {
+        self.title_in(Language::En)
+    }
+
+    pub fn title_in(self, language: Language) -> &'static str {
         match self {
-            Self::Projects => "Проекты",
-            Self::Groups => "Группы",
-            Self::Favorites => "Избранное",
-            Self::Overview => "Обзор",
-            Self::Repository => "Репозиторий",
-            Self::File => "Файл",
+            Self::Projects => language.text("Projects", "Проекты"),
+            Self::Groups => language.text("Groups", "Группы"),
+            Self::Favorites => language.text("Favorites", "Избранное"),
+            Self::Overview => language.text("Overview", "Обзор"),
+            Self::Repository => language.text("Repository", "Репозиторий"),
+            Self::File => language.text("File", "Файл"),
             Self::MergeRequests => "Merge requests",
             Self::MrDetails => "Merge request",
-            Self::MrDiff => "Дифф",
-            Self::MrNotes => "Обсуждения",
-            Self::Pipelines => "Пайплайны",
-            Self::Jobs => "Джобы",
-            Self::Trace => "Лог джобы",
-            Self::Settings => "Настройки",
-            Self::Branches => "Ветки",
+            Self::MrDiff => language.text("Diff", "Дифф"),
+            Self::MrNotes => language.text("Discussions", "Обсуждения"),
+            Self::Pipelines => language.text("Pipelines", "Пайплайны"),
+            Self::Jobs => language.text("Jobs", "Джобы"),
+            Self::Trace => language.text("Job log", "Лог джобы"),
+            Self::Settings => language.text("Settings", "Настройки"),
+            Self::Branches => language.text("Branches", "Ветки"),
         }
     }
 
@@ -382,37 +387,131 @@ pub const SETTINGS: &[Setting] = &[
 ];
 
 impl Setting {
+    pub fn label_in(&self, language: Language) -> &'static str {
+        if language == Language::Ru {
+            return self.label;
+        }
+        match self.key {
+            "name" => "Project name",
+            "description" => "Description",
+            "visibility" => "Visibility",
+            "default_branch" => "Default branch",
+            "merge_method" => "Merge method",
+            "squash_option" => "Squash commits",
+            "only_allow_merge_if_pipeline_succeeds" => "Require successful CI",
+            "only_allow_merge_if_all_discussions_are_resolved" => "Require resolved discussions",
+            "remove_source_branch_after_merge" => "Delete source branch",
+            "issues_access_level" => "Issues access",
+            "merge_requests_access_level" => "Merge request access",
+            "wiki_access_level" => "Wiki access",
+            "builds_access_level" => "CI / CD access",
+            "shared_runners_enabled" => "Shared runners",
+            "build_timeout" => "Job timeout, seconds",
+            _ => self.label,
+        }
+    }
+
+    pub fn group_in(&self, language: Language) -> &'static str {
+        let english = match self.group {
+            "Общие" => "General",
+            "Репозиторий" => "Repository",
+            "Возможности" => "Features",
+            other => other,
+        };
+        language.text(english, self.group)
+    }
+
+    pub fn help_in(&self, language: Language) -> &'static str {
+        if language == Language::Ru {
+            return self.help;
+        }
+        match self.key {
+            "name" => "Human-readable project name. The repository path stays unchanged.",
+            "description" => "Project description shown in the catalog and project overview.",
+            "visibility" => "Who can see the project. Changing this may expose its contents.",
+            "default_branch" => "Existing branch opened by default.",
+            "merge_method" => "merge, semi-linear rebase_merge, or fast-forward ff.",
+            "squash_option" => "Squash policy when merging a merge request.",
+            "only_allow_merge_if_pipeline_succeeds" => {
+                "Require a successful pipeline before merging."
+            }
+            "only_allow_merge_if_all_discussions_are_resolved" => {
+                "All discussions must be resolved before merging."
+            }
+            "remove_source_branch_after_merge" => {
+                "Default choice for deleting the source branch after merging."
+            }
+            "issues_access_level" => {
+                "disabled — off; private — members; enabled — follows project visibility."
+            }
+            "merge_requests_access_level" => "Access level for project merge requests.",
+            "wiki_access_level" => "Access level for the project Wiki.",
+            "builds_access_level" => "Access level for project CI / CD.",
+            "shared_runners_enabled" => "Allow instance runners for this project.",
+            "build_timeout" => "Maximum job duration. At least 600 seconds.",
+            _ => self.help,
+        }
+    }
+
     pub fn parse(&self, input: &str) -> Result<Value, String> {
+        self.parse_in(input, Language::En)
+    }
+
+    pub fn parse_in(&self, input: &str, language: Language) -> Result<Value, String> {
         if input
             .chars()
             .any(|c| c.is_control() && !(self.key == "description" && matches!(c, '\n' | '\t')))
         {
-            return Err("Управляющие символы недопустимы".into());
+            return Err(language
+                .text(
+                    "Control characters are not allowed",
+                    "Управляющие символы недопустимы",
+                )
+                .into());
         }
         match self.kind {
             SettingKind::Text { required, max } => {
                 if required && input.trim().is_empty() {
-                    return Err("Значение не может быть пустым".into());
+                    return Err(language
+                        .text("The value cannot be empty", "Значение не может быть пустым")
+                        .into());
                 }
                 if input.chars().count() > max {
-                    return Err(format!("Не более {max} символов"));
+                    return Err(crate::tr!(
+                        language,
+                        "At most {max} characters",
+                        "Не более {max} символов"
+                    ));
                 }
                 Ok(Value::String(input.into()))
             }
             SettingKind::Choice(values) if values.contains(&input) => {
                 Ok(Value::String(input.into()))
             }
-            SettingKind::Choice(values) => Err(format!("Допустимо: {}", values.join(", "))),
-            SettingKind::Bool => input
-                .parse::<bool>()
-                .map(Value::Bool)
-                .map_err(|_| "Введите true или false".into()),
+            SettingKind::Choice(values) => Err(crate::tr!(
+                language,
+                "Allowed values: {}",
+                "Допустимо: {}",
+                values.join(", ")
+            )),
+            SettingKind::Bool => input.parse::<bool>().map(Value::Bool).map_err(|_| {
+                language
+                    .text("Enter true or false", "Введите true или false")
+                    .into()
+            }),
             SettingKind::Number { min } => input
                 .parse::<u64>()
                 .ok()
                 .filter(|n| *n >= min && *n <= i32::MAX as u64)
                 .map(Value::from)
-                .ok_or_else(|| format!("Целое число от {min} до {}", i32::MAX)),
+                .ok_or_else(|| {
+                    crate::tr!(
+                        language,
+                        "An integer from {min} to {}",
+                        "Целое число от {min} до {}",
+                        i32::MAX
+                    )
+                }),
         }
     }
 }
@@ -457,6 +556,73 @@ mod tests {
         assert_eq!(
             encode("group/проект &?"),
             "group%2F%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%26%3F"
+        );
+    }
+
+    #[test]
+    fn titles_and_settings_have_both_languages_without_changing_values() {
+        assert_eq!(View::Projects.title(), "Projects");
+        assert_eq!(View::Projects.title_in(Language::Ru), "Проекты");
+        for setting in SETTINGS {
+            for text in [
+                setting.label_in(Language::En),
+                setting.group_in(Language::En),
+                setting.help_in(Language::En),
+            ] {
+                assert!(
+                    !text
+                        .chars()
+                        .any(|c| ('А'..='я').contains(&c) || matches!(c, 'Ё' | 'ё'))
+                );
+            }
+            assert_eq!(setting.label_in(Language::Ru), setting.label);
+            assert_eq!(setting.help_in(Language::Ru), setting.help);
+        }
+        assert_eq!(
+            SETTINGS[1].parse_in("Моё описание", Language::En).unwrap(),
+            "Моё описание"
+        );
+        assert_eq!(
+            SETTINGS[2].parse_in("private", Language::En).unwrap(),
+            "private"
+        );
+        assert!(
+            SETTINGS[0]
+                .parse_in("", Language::En)
+                .unwrap_err()
+                .contains("empty")
+        );
+        assert!(
+            SETTINGS[0]
+                .parse_in("", Language::Ru)
+                .unwrap_err()
+                .contains("пустым")
+        );
+        assert!(
+            SETTINGS[1]
+                .parse_in("x\u{1b}", Language::En)
+                .unwrap_err()
+                .contains("Control")
+        );
+        assert!(
+            SETTINGS[2]
+                .parse_in("invalid", Language::En)
+                .unwrap_err()
+                .contains("Allowed")
+        );
+        assert!(
+            SETTINGS[6]
+                .parse_in("invalid", Language::En)
+                .unwrap_err()
+                .contains("true or false")
+        );
+        assert!(
+            SETTINGS
+                .last()
+                .unwrap()
+                .parse_in("1", Language::En)
+                .unwrap_err()
+                .contains("integer")
         );
     }
 }

@@ -1,3 +1,4 @@
+use crate::i18n::Language;
 use crate::model::{Focus, Popup, SETTINGS, SettingKind, State, View, number, string, value_label};
 use ratatui::{
     Frame,
@@ -40,19 +41,29 @@ fn panel(title: impl Into<Line<'static>>, active: bool) -> Block<'static> {
 }
 
 pub fn draw(frame: &mut Frame, state: &State) {
+    let language = state.language;
     let area = frame.area();
     frame.render_widget(Block::default().style(fg(TEXT).bg(BG)), area);
     if area.width < 80 || area.height < 24 {
         let text = Text::from(vec![
             Line::styled("GitLab Deck", bold(BLUE)),
             Line::from(""),
-            Line::from("Увеличьте терминал минимум до 80 × 24."),
+            Line::from(language.text(
+                "Resize the terminal to at least 80 × 24.",
+                "Увеличьте терминал минимум до 80 × 24.",
+            )),
             Line::styled(
-                format!("Сейчас: {} × {}", area.width, area.height),
+                crate::tr!(
+                    language,
+                    "Current size: {} × {}",
+                    "Сейчас: {} × {}",
+                    area.width,
+                    area.height
+                ),
                 fg(MUTED),
             ),
             Line::from(""),
-            Line::styled("q — выход", fg(MUTED)),
+            Line::styled(language.text("q — quit", "q — выход"), fg(MUTED)),
         ]);
         frame.render_widget(
             Paragraph::new(text)
@@ -80,11 +91,12 @@ pub fn draw(frame: &mut Frame, state: &State) {
     footer(frame, rows[3], state);
     status_line(frame, rows[4], state);
     if let Some(popup) = &state.popup {
-        popup_draw(frame, area, popup, state.popup_scroll);
+        popup_draw(frame, area, popup, state.popup_scroll, language);
     }
 }
 
 fn header(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let parts = Layout::horizontal([
         Constraint::Length(18),
         Constraint::Min(10),
@@ -108,25 +120,37 @@ fn header(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(Line::from(host)), parts[1]);
     let label = if state.loading {
         let spinner = ["◐", "◓", "◑", "◒"][(state.tick as usize / 2) % 4];
-        Span::styled(format!("{spinner} загрузка"), fg(CYAN))
+        Span::styled(
+            crate::tr!(language, "{spinner} loading", "{spinner} загрузка"),
+            fg(CYAN),
+        )
     } else if state.demo {
-        Span::styled(" ДЕМО ", bold(GREEN))
+        Span::styled(language.text(" DEMO ", " ДЕМО "), bold(GREEN))
     } else {
         Span::styled(" GitLab ", fg(PURPLE))
     };
     frame.render_widget(
-        Paragraph::new(Line::from(label)).alignment(Alignment::Right),
+        Paragraph::new(Line::from(vec![
+            label,
+            Span::styled(format!("· {}", language.code().to_uppercase()), fg(MUTED)),
+        ]))
+        .alignment(Alignment::Right),
         parts[2],
     );
 }
 
 fn tabs(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let current = state.context.view;
     let items = [
-        ("o", "Обзор", matches!(current, View::Overview)),
+        (
+            "o",
+            language.text("Overview", "Обзор"),
+            matches!(current, View::Overview),
+        ),
         (
             "f",
-            "Файлы",
+            language.text("Files", "Файлы"),
             matches!(current, View::Repository | View::File | View::Branches),
         ),
         (
@@ -142,7 +166,11 @@ fn tabs(frame: &mut Frame, area: Rect, state: &State) {
             "CI / CD",
             matches!(current, View::Pipelines | View::Jobs | View::Trace),
         ),
-        ("s", "Настройки", matches!(current, View::Settings)),
+        (
+            "s",
+            language.text("Settings", "Настройки"),
+            matches!(current, View::Settings),
+        ),
     ];
     let mut spans = Vec::new();
     for (key, label, selected) in items {
@@ -185,17 +213,24 @@ fn workspace(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn sidebar(frame: &mut Frame, area: Rect, state: &State) {
-    let block = panel(" Обзор ", state.focus == Focus::Sidebar);
+    let language = state.language;
+    let block = panel(
+        language.text(" Browse ", " Обзор "),
+        state.focus == Focus::Sidebar,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let labels = [
-        "  Проекты",
-        "  Группы",
-        "  Все MR",
-        "  Избранное",
-        "󰒓  Сервер",
+        language.text("  Projects", "  Проекты"),
+        language.text("  Groups", "  Группы"),
+        language.text("  All MRs", "  Все MR"),
+        language.text("  Favorites", "  Избранное"),
+        language.text("󰒓  Server", "󰒓  Сервер"),
     ];
-    let mut lines = vec![Line::styled("ПРОСТРАНСТВО", fg(MUTED)), Line::from("")];
+    let mut lines = vec![
+        Line::styled(language.text("WORKSPACE", "ПРОСТРАНСТВО"), fg(MUTED)),
+        Line::from(""),
+    ];
     for (index, label) in labels.iter().enumerate() {
         let active = index == state.sidebar_selected;
         lines.push(Line::styled(
@@ -210,7 +245,7 @@ fn sidebar(frame: &mut Frame, area: Rect, state: &State) {
     }
     if let Some(group) = &state.context.group {
         lines.extend([
-            Line::styled("ТЕКУЩАЯ ГРУППА", fg(MUTED)),
+            Line::styled(language.text("CURRENT GROUP", "ТЕКУЩАЯ ГРУППА"), fg(MUTED)),
             Line::from(""),
             Line::styled(string(group, "full_path").to_owned(), fg(PURPLE)),
         ]);
@@ -218,7 +253,7 @@ fn sidebar(frame: &mut Frame, area: Rect, state: &State) {
     if let Some(project) = &state.context.project {
         lines.extend([
             Line::from(""),
-            Line::styled("ПРОЕКТ", fg(MUTED)),
+            Line::styled(language.text("PROJECT", "ПРОЕКТ"), fg(MUTED)),
             Line::from(""),
             Line::styled(string(project, "name").to_owned(), fg(BLUE)),
         ]);
@@ -226,15 +261,26 @@ fn sidebar(frame: &mut Frame, area: Rect, state: &State) {
     if inner.height >= 25 {
         lines.extend([
             Line::from(""),
-            Line::styled("Tab — сменить фокус", fg(MUTED)),
-            Line::styled("1 / 2 / 3 — разделы", fg(MUTED)),
+            Line::styled(
+                language.text("Tab — change focus", "Tab — сменить фокус"),
+                fg(MUTED),
+            ),
+            Line::styled(
+                language.text("1 / 2 / 3 — sections", "1 / 2 / 3 — разделы"),
+                fg(MUTED),
+            ),
         ]);
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn list_view(frame: &mut Frame, area: Rect, state: &State) {
-    let title = format!(" {}  {} ", state.context.view.title(), state.rows.len());
+    let language = state.language;
+    let title = format!(
+        " {}  {} ",
+        state.context.view.title_in(language),
+        state.rows.len()
+    );
     let block = panel(title, state.focus == Focus::Main);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -248,7 +294,7 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
     ])
     .split(inner);
     let query = if state.context.query.is_empty() {
-        "  / — поиск".into()
+        language.text("  / — search", "  / — поиск").into()
     } else {
         format!("  {}", state.context.query)
     };
@@ -258,7 +304,7 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
     let compact = inner.width < 75;
-    let (headers, widths) = table_columns(state.context.view, compact);
+    let (headers, widths) = table_columns(state.context.view, compact, language);
     let table_rows = state.rows.iter().map(|row| {
         let cells = table_cells(row, state.context.view, compact, state);
         Row::new(cells).height(2).bottom_margin(1)
@@ -272,7 +318,9 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
         TableState::default().with_selected(Some(state.selected.min(state.rows.len() - 1)));
     frame.render_stateful_widget(table, sections[1], &mut table_state);
     let hint = match state.context.view {
-        View::Repository => format!(
+        View::Repository => crate::tr!(
+            language,
+            "{}  ·  page {}",
             "{}  ·  страница {}",
             if state.context.path.is_empty() {
                 "/"
@@ -281,8 +329,15 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
             },
             state.context.page
         ),
-        View::Favorites => format!("{} избранных проектов", state.rows.len()),
-        _ => format!(
+        View::Favorites => crate::tr!(
+            language,
+            "{} favorite projects",
+            "{} избранных проектов",
+            state.rows.len()
+        ),
+        _ => crate::tr!(
+            language,
+            "Page {}  ·  up to {} entries  ·  n / N — browse",
             "Страница {}  ·  до {} записей  ·  n / N — листать",
             state.context.page,
             crate::model::PAGE_SIZE
@@ -291,16 +346,52 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(hint).style(fg(MUTED)), sections[2]);
 }
 
-fn table_columns(view: View, compact: bool) -> (Vec<&'static str>, Vec<Constraint>) {
+fn table_columns(
+    view: View,
+    compact: bool,
+    language: Language,
+) -> (Vec<&'static str>, Vec<Constraint>) {
     let (a, b, c) = match view {
-        View::Projects | View::Favorites => ("ПРОЕКТ", "ДОСТУП", "ОБНОВЛЁН"),
-        View::Groups => ("ГРУППА", "ДОСТУП", "ID"),
-        View::MergeRequests => ("MERGE REQUEST", "СТАТУС", "АВТОР"),
-        View::Pipelines => ("ПАЙПЛАЙН / ВЕТКА", "СТАТУС", "ВРЕМЯ"),
-        View::Jobs => ("ДЖОБА / ЭТАП", "СТАТУС", "ВРЕМЯ"),
-        View::Repository => ("ИМЯ", "ТИП", "РЕЖИМ"),
-        View::Branches => ("ВЕТКА", "ЗАЩИТА", "КОММИТ"),
-        _ => ("ИМЯ", "СТАТУС", "ID"),
+        View::Projects | View::Favorites => (
+            language.text("PROJECT", "ПРОЕКТ"),
+            language.text("VISIBILITY", "ДОСТУП"),
+            language.text("UPDATED", "ОБНОВЛЁН"),
+        ),
+        View::Groups => (
+            language.text("GROUP", "ГРУППА"),
+            language.text("VISIBILITY", "ДОСТУП"),
+            "ID",
+        ),
+        View::MergeRequests => (
+            "MERGE REQUEST",
+            language.text("STATUS", "СТАТУС"),
+            language.text("AUTHOR", "АВТОР"),
+        ),
+        View::Pipelines => (
+            language.text("PIPELINE / BRANCH", "ПАЙПЛАЙН / ВЕТКА"),
+            language.text("STATUS", "СТАТУС"),
+            language.text("DURATION", "ВРЕМЯ"),
+        ),
+        View::Jobs => (
+            language.text("JOB / STAGE", "ДЖОБА / ЭТАП"),
+            language.text("STATUS", "СТАТУС"),
+            language.text("DURATION", "ВРЕМЯ"),
+        ),
+        View::Repository => (
+            language.text("NAME", "ИМЯ"),
+            language.text("TYPE", "ТИП"),
+            language.text("MODE", "РЕЖИМ"),
+        ),
+        View::Branches => (
+            language.text("BRANCH", "ВЕТКА"),
+            language.text("PROTECTION", "ЗАЩИТА"),
+            language.text("COMMIT", "КОММИТ"),
+        ),
+        _ => (
+            language.text("NAME", "ИМЯ"),
+            language.text("STATUS", "СТАТУС"),
+            "ID",
+        ),
     };
     if compact {
         (
@@ -320,6 +411,7 @@ fn table_columns(view: View, compact: bool) -> (Vec<&'static str>, Vec<Constrain
 }
 
 fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> Vec<Cell<'a>> {
+    let language = state.language;
     let (name, sub, status, third) = match view {
         View::Projects | View::Favorites => {
             let star = if state.favorites.contains(&number(row, "id")) {
@@ -361,13 +453,13 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
             format!("#{}  {}", number(row, "id"), string(row, "ref")),
             short(string(row, "sha"), 8),
             string(row, "status").into(),
-            duration(row.get("duration")),
+            duration(row.get("duration"), language),
         ),
         View::Jobs => (
             string(row, "name").into(),
             string(row, "stage").into(),
             string(row, "status").into(),
-            duration(row.get("duration")),
+            duration(row.get("duration"), language),
         ),
         View::Repository => (
             format!(
@@ -381,16 +473,16 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
             ),
             String::new(),
             if string(row, "type") == "tree" {
-                "каталог".into()
+                language.text("directory", "каталог").into()
             } else {
-                "файл".into()
+                language.text("file", "файл").into()
             },
             string(row, "mode").into(),
         ),
         View::Branches => (
             format!(" {}", string(row, "name")),
             if row.get("default").and_then(Value::as_bool).unwrap_or(false) {
-                "основная ветка".into()
+                language.text("default branch", "основная ветка").into()
             } else {
                 String::new()
             },
@@ -401,7 +493,7 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
             {
                 " protected".into()
             } else {
-                "обычная".into()
+                language.text("unprotected", "обычная").into()
             },
             row.get("commit")
                 .map(|c| short(string(c, "short_id"), 8))
@@ -436,25 +528,38 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
 }
 
 fn empty(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let (title, hint) = if state.loading {
         (
-            "Загрузка данных…",
-            "Можно продолжать навигацию или выйти по q",
+            language.text("Loading data…", "Загрузка данных…"),
+            language.text(
+                "Keep navigating or press q to quit",
+                "Можно продолжать навигацию или выйти по q",
+            ),
         )
     } else if state.error.is_some() {
         (
-            "Не удалось загрузить данные",
-            "F5 — повторить чтение · H — сменить сервер",
+            language.text("Could not load data", "Не удалось загрузить данные"),
+            language.text(
+                "F5 — retry reading · H — change server",
+                "F5 — повторить чтение · H — сменить сервер",
+            ),
         )
     } else if state.context.view == View::Favorites {
         (
-            "Пока нет избранных проектов",
-            "Откройте каталог и нажмите * на нужном проекте",
+            language.text("No favorite projects yet", "Пока нет избранных проектов"),
+            language.text(
+                "Open the project catalog and press * to add a favorite",
+                "Откройте каталог и нажмите * на нужном проекте",
+            ),
         )
     } else {
         (
-            "Ничего не найдено",
-            "Попробуйте другой поиск или предыдущую страницу",
+            language.text("Nothing found", "Ничего не найдено"),
+            language.text(
+                "Try another search or the previous page",
+                "Попробуйте другой поиск или предыдущую страницу",
+            ),
         )
     };
     frame.render_widget(
@@ -470,12 +575,16 @@ fn empty(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn overview(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let project = if state.object.is_object() {
         &state.object
     } else {
         state.context.project.as_ref().unwrap_or(&Value::Null)
     };
-    let block = panel("  Обзор проекта ", state.focus == Focus::Main);
+    let block = panel(
+        language.text("  Project overview ", "  Обзор проекта "),
+        state.focus == Focus::Main,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut lines = vec![
@@ -486,13 +595,22 @@ fn overview(frame: &mut Frame, area: Rect, state: &State) {
         Line::from(""),
         Line::from(""),
     ];
-    lines.extend(project_facts(project));
+    lines.extend(project_facts(project, language));
     lines.extend([
         Line::from(""),
-        Line::styled("РАЗДЕЛЫ ПРОЕКТА", fg(MUTED)),
+        Line::styled(
+            language.text("PROJECT SECTIONS", "РАЗДЕЛЫ ПРОЕКТА"),
+            fg(MUTED),
+        ),
         Line::from(""),
-        Line::from("f  файлы       m  merge requests       p  пайплайны"),
-        Line::from("b  ветки       s  настройки            Esc  назад"),
+        Line::from(language.text(
+            "f  files       m  merge requests       p  pipelines",
+            "f  файлы       m  merge requests       p  пайплайны",
+        )),
+        Line::from(language.text(
+            "b  branches    s  settings             Esc  back",
+            "b  ветки       s  настройки            Esc  назад",
+        )),
     ]);
     frame.render_widget(
         Paragraph::new(lines)
@@ -503,25 +621,32 @@ fn overview(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn text_view(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let title = match state.context.view {
-        View::Trace => state
-            .context
-            .job
-            .as_ref()
-            .map(|v| format!("  {} · лог #{} ", string(v, "name"), number(v, "id"))),
+        View::Trace => state.context.job.as_ref().map(|v| {
+            crate::tr!(
+                language,
+                "  {} · job log #{} ",
+                "  {} · лог #{} ",
+                string(v, "name"),
+                number(v, "id")
+            )
+        }),
         View::File => state
             .context
             .file
             .as_ref()
             .map(|v| format!(" 󰈙 {} ", string(v, "path"))),
-        View::MrDetails | View::MrDiff | View::MrNotes => state
-            .context
-            .mr
-            .as_ref()
-            .map(|v| format!(" !{} · {} ", number(v, "iid"), state.context.view.title())),
+        View::MrDetails | View::MrDiff | View::MrNotes => state.context.mr.as_ref().map(|v| {
+            format!(
+                " !{} · {} ",
+                number(v, "iid"),
+                state.context.view.title_in(language)
+            )
+        }),
         _ => None,
     }
-    .unwrap_or_else(|| format!(" {} ", state.context.view.title()));
+    .unwrap_or_else(|| format!(" {} ", state.context.view.title_in(language)));
     let block = panel(title, state.focus == Focus::Main);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -571,7 +696,11 @@ fn text_view(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn settings(frame: &mut Frame, area: Rect, state: &State) {
-    let block = panel(" 󰒓 Настройки проекта ", state.focus == Focus::Main);
+    let language = state.language;
+    let block = panel(
+        language.text(" 󰒓 Project settings ", " 󰒓 Настройки проекта "),
+        state.focus == Focus::Main,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let visible = usize::from(inner.height / 4).max(1);
@@ -592,9 +721,17 @@ fn settings(frame: &mut Frame, area: Rect, state: &State) {
             .object
             .get(setting.key)
             .filter(|v| !v.is_null())
-            .map(display_setting)
-            .unwrap_or_else(|| "недоступно на этом сервере".into());
-        let label = format!(" {} · {} ", setting.group, setting.label);
+            .map(|value| display_setting(value, language))
+            .unwrap_or_else(|| {
+                language
+                    .text("unavailable on this server", "недоступно на этом сервере")
+                    .into()
+            });
+        let label = format!(
+            " {} · {} ",
+            setting.group_in(language),
+            setting.label_in(language)
+        );
         let field = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -613,19 +750,20 @@ fn settings(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
-fn display_setting(value: &Value) -> String {
+fn display_setting(value: &Value, language: Language) -> String {
     match value {
-        Value::Bool(true) => "  включено".into(),
-        Value::Bool(false) => "  выключено".into(),
+        Value::Bool(true) => language.text("  enabled", "  включено").into(),
+        Value::Bool(false) => language.text("  disabled", "  выключено").into(),
         _ => value_label(value),
     }
 }
 
 fn details(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let title = if state.context.view == View::Settings {
-        " О поле "
+        language.text(" About this field ", " О поле ")
     } else {
-        " Предпросмотр "
+        language.text(" Preview ", " Предпросмотр ")
     };
     let block = panel(title, state.focus == Focus::Details);
     let inner = block.inner(area);
@@ -633,14 +771,17 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
     let lines = if state.context.view == View::Settings {
         let setting = &SETTINGS[state.selected.min(SETTINGS.len() - 1)];
         let mut lines = vec![
-            Line::styled(setting.label, bold(BLUE)),
+            Line::styled(setting.label_in(language), bold(BLUE)),
             Line::from(""),
-            Line::from(setting.help),
+            Line::from(setting.help_in(language)),
             Line::from(""),
         ];
         if let SettingKind::Choice(values) = setting.kind {
             lines.extend([
-                Line::styled("Допустимые значения", fg(MUTED)),
+                Line::styled(
+                    language.text("Allowed values", "Допустимые значения"),
+                    fg(MUTED),
+                ),
                 Line::from(values.join(" / ")),
                 Line::from(""),
             ]);
@@ -648,9 +789,15 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
         lines.extend([
             Line::styled(setting.key, fg(MUTED)),
             Line::from(""),
-            Line::from("e / Enter — изменить"),
+            Line::from(language.text("e / Enter — edit", "e / Enter — изменить")),
             Line::from(""),
-            Line::styled("Сохранение потребует подтверждения.", fg(YELLOW)),
+            Line::styled(
+                language.text(
+                    "Saving requires confirmation.",
+                    "Сохранение потребует подтверждения.",
+                ),
+                fg(YELLOW),
+            ),
         ]);
         lines
     } else if let Some(row) = match state.context.view {
@@ -660,7 +807,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
         _ => state.selected().or(state.context.project.as_ref()),
     } {
         match state.context.view {
-            View::Projects | View::Favorites => project_preview(row),
+            View::Projects | View::Favorites => project_preview(row, language),
             View::Groups => vec![
                 Line::styled(string(row, "name").to_owned(), bold(BLUE)),
                 Line::from(""),
@@ -668,25 +815,33 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
                 Line::from(""),
                 Line::from(string(row, "description").to_owned()),
                 Line::from(""),
-                Line::styled("Enter — проекты группы", fg(MUTED)),
+                Line::styled(
+                    language.text("Enter — group projects", "Enter — проекты группы"),
+                    fg(MUTED),
+                ),
             ],
             View::Pipelines | View::Jobs | View::Trace => ci_preview(row, state),
-            View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes => mr_preview(row),
+            View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes => {
+                mr_preview(row, language)
+            }
             View::Repository | View::File => vec![
                 Line::styled(string(row, "name").to_owned(), bold(BLUE)),
                 Line::from(""),
                 Line::from(string(row, "path").to_owned()),
                 Line::from(""),
-                Line::styled("Enter — открыть", fg(MUTED)),
+                Line::styled(language.text("Enter — open", "Enter — открыть"), fg(MUTED)),
             ],
             _ => vec![
-                Line::styled(state.context.view.title(), fg(MUTED)),
+                Line::styled(state.context.view.title_in(language), fg(MUTED)),
                 Line::from(""),
                 Line::from(string(row, "name").to_owned()),
             ],
         }
     } else {
-        vec![Line::styled("Выберите строку", fg(MUTED))]
+        vec![Line::styled(
+            language.text("Select an entry", "Выберите строку"),
+            fg(MUTED),
+        )]
     };
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((
@@ -701,7 +856,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn project_preview(project: &Value) -> Vec<Line<'static>> {
+fn project_preview(project: &Value, language: Language) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::styled(string(project, "name").to_owned(), bold(BLUE)),
         Line::styled(string(project, "path_with_namespace").to_owned(), fg(MUTED)),
@@ -722,15 +877,18 @@ fn project_preview(project: &Value) -> Vec<Line<'static>> {
             Line::from(""),
         ]);
     }
-    lines.extend(project_facts(project));
+    lines.extend(project_facts(project, language));
     lines.extend([
         Line::from(""),
-        Line::styled("Enter — открыть проект", fg(MUTED)),
+        Line::styled(
+            language.text("Enter — open project", "Enter — открыть проект"),
+            fg(MUTED),
+        ),
     ]);
     lines
 }
 
-fn project_facts(project: &Value) -> Vec<Line<'static>> {
+fn project_facts(project: &Value, language: Language) -> Vec<Line<'static>> {
     let role = ["project_access", "group_access"]
         .iter()
         .filter_map(|key| {
@@ -750,43 +908,71 @@ fn project_facts(project: &Value) -> Vec<Line<'static>> {
         None => "—",
     };
     vec![
-        fact("Доступ", string(project, "visibility")),
-        fact("Роль", role),
-        fact("Ветка", string(project, "default_branch")),
-        fact("ID проекта", &number(project, "id").to_string()),
-        fact("Обновлён", &date(string(project, "last_activity_at"))),
+        fact(
+            language.text("Visibility", "Доступ"),
+            string(project, "visibility"),
+        ),
+        fact(language.text("Role", "Роль"), role),
+        fact(
+            language.text("Branch", "Ветка"),
+            string(project, "default_branch"),
+        ),
+        fact(
+            language.text("Project ID", "ID проекта"),
+            &number(project, "id").to_string(),
+        ),
+        fact(
+            language.text("Updated", "Обновлён"),
+            &date(string(project, "last_activity_at")),
+        ),
     ]
 }
 
 fn ci_preview(item: &Value, state: &State) -> Vec<Line<'static>> {
+    let language = state.language;
     let status = string(item, "status");
     let mut lines = vec![
         Line::styled(format!("#{}", number(item, "id")), bold(BLUE)),
         Line::from(""),
         Line::styled(status.to_owned(), fg(status_color(status))),
         Line::from(""),
-        fact("Время", &duration(item.get("duration"))),
-        fact("Этап", string(item, "stage")),
-        fact("Ветка", string(item, "ref")),
+        fact(
+            language.text("Duration", "Время"),
+            &duration(item.get("duration"), language),
+        ),
+        fact(language.text("Stage", "Этап"), string(item, "stage")),
+        fact(language.text("Branch", "Ветка"), string(item, "ref")),
         Line::from(""),
     ];
     if let Some(pipeline) = &state.context.pipeline {
         lines.extend([
-            fact("Пайплайн", &format!("#{}", number(pipeline, "id"))),
+            fact(
+                language.text("Pipeline", "Пайплайн"),
+                &format!("#{}", number(pipeline, "id")),
+            ),
             Line::from(""),
         ]);
     }
     lines.extend([
-        Line::styled("r — повторить", fg(MUTED)),
-        Line::styled("x — отменить", fg(MUTED)),
-        Line::styled("S — ручной запуск", fg(MUTED)),
+        Line::styled(language.text("r — retry", "r — повторить"), fg(MUTED)),
+        Line::styled(language.text("x — cancel", "x — отменить"), fg(MUTED)),
+        Line::styled(
+            language.text("S — play manual job", "S — ручной запуск"),
+            fg(MUTED),
+        ),
         Line::from(""),
-        Line::styled("Действия требуют подтверждения.", fg(YELLOW)),
+        Line::styled(
+            language.text(
+                "Actions require confirmation.",
+                "Действия требуют подтверждения.",
+            ),
+            fg(YELLOW),
+        ),
     ]);
     lines
 }
 
-fn mr_preview(item: &Value) -> Vec<Line<'static>> {
+fn mr_preview(item: &Value, language: Language) -> Vec<Line<'static>> {
     vec![
         Line::styled(format!("!{}", number(item, "iid")), bold(BLUE)),
         Line::from(""),
@@ -803,8 +989,11 @@ fn mr_preview(item: &Value) -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(string(item, "description").to_owned()),
         Line::from(""),
-        Line::styled("d — дифф", fg(MUTED)),
-        Line::styled("c — обсуждения", fg(MUTED)),
+        Line::styled(language.text("d — diff", "d — дифф"), fg(MUTED)),
+        Line::styled(
+            language.text("c — discussions", "c — обсуждения"),
+            fg(MUTED),
+        ),
     ]
 }
 
@@ -816,27 +1005,46 @@ fn fact(label: &str, value: &str) -> Line<'static> {
 }
 
 fn footer(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let contextual = match state.context.view {
-        View::Projects | View::Groups | View::Favorites => {
-            "Enter открыть   / поиск   * избранное   n/N страницы"
-        }
-        View::Pipelines => "Enter джобы   r повторить   x отменить   n/N страницы",
-        View::Jobs => "Enter лог   r повторить   x отменить   S запуск",
-        View::Settings => "e / Enter изменить   j/k поле   Esc назад",
-        View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes => {
-            "Enter подробно   d дифф   c обсуждения   / поиск"
-        }
-        View::Trace | View::File => {
-            "j/k ↑↓ текст   ←→ по горизонтали   / поиск   F5 обновить   Esc назад"
-        }
-        View::Repository => "Enter открыть   j/k выбор   n/N страницы   Esc назад",
-        _ => "Enter открыть   j/k выбор   / поиск   Esc назад",
+        View::Projects | View::Groups | View::Favorites => language.text(
+            "Enter open   / search   * favorite   n/N pages",
+            "Enter открыть   / поиск   * избранное   n/N страницы",
+        ),
+        View::Pipelines => language.text(
+            "Enter jobs   r retry   x cancel   n/N pages",
+            "Enter джобы   r повторить   x отменить   n/N страницы",
+        ),
+        View::Jobs => language.text(
+            "Enter log   r retry   x cancel   S play",
+            "Enter лог   r повторить   x отменить   S запуск",
+        ),
+        View::Settings => language.text(
+            "e / Enter edit   j/k field   Esc back",
+            "e / Enter изменить   j/k поле   Esc назад",
+        ),
+        View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes => language.text(
+            "Enter details   d diff   c discussions   / search",
+            "Enter подробно   d дифф   c обсуждения   / поиск",
+        ),
+        View::Trace | View::File => language.text(
+            "j/k ↑↓ scroll   ←→ horizontal   / search   F5 refresh   Esc back",
+            "j/k ↑↓ текст   ←→ по горизонтали   / поиск   F5 обновить   Esc назад",
+        ),
+        View::Repository => language.text(
+            "Enter open   j/k select   n/N pages   Esc back",
+            "Enter открыть   j/k выбор   n/N страницы   Esc назад",
+        ),
+        _ => language.text(
+            "Enter open   j/k select   / search   Esc back",
+            "Enter открыть   j/k выбор   / поиск   Esc назад",
+        ),
     };
     frame.render_widget(
         Paragraph::new(vec![
             Line::styled(contextual, fg(BLUE)),
             Line::styled(
-                "Tab фокус    1 проекты  2 группы  3 MR    H сервер    ? помощь    q выход",
+                language.text("Tab focus   1 projects  2 groups  3 MRs   H server   L en/ru   ? help   q quit", "Tab фокус   1 проекты  2 группы  3 MR   H сервер   L en/ru   ? помощь   q выход"),
                 fg(MUTED),
             ),
         ]),
@@ -845,20 +1053,23 @@ fn footer(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn status_line(frame: &mut Frame, area: Rect, state: &State) {
+    let language = state.language;
     let line = if let Some(error) = &state.error {
         Line::styled(format!(" {}", error.replace(['\n', '\r'], " ")), fg(RED))
     } else if !state.status.is_empty() {
         Line::styled(state.status.replace(['\n', '\r'], " "), fg(YELLOW))
     } else {
         Line::styled(
-            format!(
+            crate::tr!(
+                language,
+                "{}  ·  {} entries  ·  {}",
                 "{}  ·  {} записей  ·  {}",
-                state.context.view.title(),
+                state.context.view.title_in(language),
                 state.rows.len(),
                 if state.demo {
-                    "демонстрационные данные"
+                    language.text("demo data", "демонстрационные данные")
                 } else {
-                    "F5 / R — обновить"
+                    language.text("F5 / R — refresh", "F5 / R — обновить")
                 }
             ),
             fg(MUTED),
@@ -867,7 +1078,7 @@ fn status_line(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16) {
+fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, language: Language) {
     let (width, height) = match popup {
         Popup::Help => (90, 23),
         Popup::Input { .. } => (85, 10),
@@ -880,7 +1091,7 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16) {
     );
     frame.render_widget(Clear, popup_area);
     let title = match popup {
-        Popup::Help => " ? Клавиши ",
+        Popup::Help => language.text(" ? Keybindings ", " ? Клавиши "),
         Popup::Input { title, .. } | Popup::Confirm { title, .. } => title.as_str(),
     };
     let block = panel(title.to_owned(), true).style(fg(TEXT).bg(SURFACE));
@@ -889,24 +1100,82 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16) {
     match popup {
         Popup::Help => {
             let lines = [
-                "j / k, ↑ / ↓     выбор строки или прокрутка текста",
-                "← / → в тексте   горизонтальная прокрутка",
-                "Tab              фокус: меню → содержимое → детали",
-                "1 / 2 / 3        проекты / группы / все MR",
-                "o / f / m        обзор / файлы / MR текущего проекта",
-                "p / b / s        CI / ветки / настройки проекта",
-                "Enter            открыть выбранное; изменить поле настроек",
-                "Esc / Backspace  вернуться назад",
-                "/                поиск; Enter применить, Esc отменить",
-                "n / N, [ / ]     страницы; в тексте n/N — поиск далее/назад",
-                "d / c            дифф / обсуждения merge request",
-                "r / x / S        повтор / отмена CI / запуск ручной джобы",
-                "F5 / R           перечитать текущий экран",
-                "*                добавить / убрать избранный проект",
-                "e                редактировать выбранную настройку",
-                "H                подключиться к другому серверу",
-                "Enter / y        подтвердить действие; Esc / n — отменить",
-                "q / Ctrl+C       выход; ? / Esc — закрыть эту помощь",
+                language.text(
+                    "j / k, ↑ / ↓     select an entry or scroll text",
+                    "j / k, ↑ / ↓     выбор строки или прокрутка текста",
+                ),
+                language.text(
+                    "← / → in text    scroll horizontally",
+                    "← / → в тексте   горизонтальная прокрутка",
+                ),
+                language.text(
+                    "Tab              focus: menu → content → details",
+                    "Tab              фокус: меню → содержимое → детали",
+                ),
+                language.text(
+                    "1 / 2 / 3        projects / groups / all MRs",
+                    "1 / 2 / 3        проекты / группы / все MR",
+                ),
+                language.text(
+                    "o / f / m        overview / files / project MRs",
+                    "o / f / m        обзор / файлы / MR текущего проекта",
+                ),
+                language.text(
+                    "p / b / s        CI / branches / project settings",
+                    "p / b / s        CI / ветки / настройки проекта",
+                ),
+                language.text(
+                    "Enter            open selection; edit a setting",
+                    "Enter            открыть выбранное; изменить поле настроек",
+                ),
+                language.text(
+                    "Esc / Backspace  go back",
+                    "Esc / Backspace  вернуться назад",
+                ),
+                language.text(
+                    "/                search; Enter apply, Esc cancel",
+                    "/                поиск; Enter применить, Esc отменить",
+                ),
+                language.text(
+                    "n / N, [ / ]     pages; n/N in text — next/previous match",
+                    "n / N, [ / ]     страницы; в тексте n/N — поиск далее/назад",
+                ),
+                language.text(
+                    "d / c            merge request diff / discussions",
+                    "d / c            дифф / обсуждения merge request",
+                ),
+                language.text(
+                    "r / x / S        retry / cancel CI / play a manual job",
+                    "r / x / S        повтор / отмена CI / запуск ручной джобы",
+                ),
+                language.text(
+                    "F5 / R           refresh the current screen",
+                    "F5 / R           перечитать текущий экран",
+                ),
+                language.text(
+                    "*                add / remove a favorite project",
+                    "*                добавить / убрать избранный проект",
+                ),
+                language.text(
+                    "e                edit the selected setting",
+                    "e                редактировать выбранную настройку",
+                ),
+                language.text(
+                    "H                connect to another server",
+                    "H                подключиться к другому серверу",
+                ),
+                language.text(
+                    "L                switch English / Russian",
+                    "L                переключить русский / английский",
+                ),
+                language.text(
+                    "Enter / y        confirm action; Esc / n — cancel",
+                    "Enter / y        подтвердить действие; Esc / n — отменить",
+                ),
+                language.text(
+                    "q / Ctrl+C       quit; ? / Esc — close this help",
+                    "q / Ctrl+C       выход; ? / Esc — закрыть эту помощь",
+                ),
             ];
             frame.render_widget(
                 Paragraph::new(lines.into_iter().map(Line::from).collect::<Vec<_>>())
@@ -939,12 +1208,19 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16) {
             );
             let hint = match purpose {
                 crate::model::InputPurpose::Setting(index) => match SETTINGS[*index].kind {
-                    SettingKind::Choice(_) | SettingKind::Bool => {
-                        "← / → выбрать   Enter продолжить   Esc отменить"
-                    }
-                    _ => "Ctrl+U очистить   Enter продолжить   Esc отменить",
+                    SettingKind::Choice(_) | SettingKind::Bool => language.text(
+                        "← / → select   Enter continue   Esc cancel",
+                        "← / → выбрать   Enter продолжить   Esc отменить",
+                    ),
+                    _ => language.text(
+                        "Ctrl+U clear   Enter continue   Esc cancel",
+                        "Ctrl+U очистить   Enter продолжить   Esc отменить",
+                    ),
                 },
-                _ => "Ctrl+U очистить   Enter продолжить   Esc отменить",
+                _ => language.text(
+                    "Ctrl+U clear   Enter continue   Esc cancel",
+                    "Ctrl+U очистить   Enter продолжить   Esc отменить",
+                ),
             };
             frame.render_widget(Paragraph::new(hint).style(fg(MUTED)), sections[2]);
             if input_inner.width > 0 && input_inner.height > 0 {
@@ -967,9 +1243,15 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16) {
             );
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled("Esc / n  отменить", fg(SOFT)),
+                    Span::styled(
+                        language.text("Esc / n  cancel", "Esc / n  отменить"),
+                        fg(SOFT),
+                    ),
                     Span::raw("     "),
-                    Span::styled("Enter / y  применить", bold(YELLOW)),
+                    Span::styled(
+                        language.text("Enter / y  apply", "Enter / y  применить"),
+                        bold(YELLOW),
+                    ),
                 ])),
                 sections[1],
             );
@@ -991,14 +1273,20 @@ fn short(value: &str, max: usize) -> String {
 fn date(value: &str) -> String {
     short(value, 16).replace('T', " ")
 }
-fn duration(value: Option<&Value>) -> String {
+fn duration(value: Option<&Value>, language: Language) -> String {
     match value.and_then(Value::as_f64) {
         Some(seconds) if seconds.is_finite() && seconds >= 0.0 => {
             let seconds = seconds as u64;
             if seconds >= 60 {
-                format!("{}м {:02}с", seconds / 60, seconds % 60)
+                crate::tr!(
+                    language,
+                    "{}m {:02}s",
+                    "{}м {:02}с",
+                    seconds / 60,
+                    seconds % 60
+                )
             } else {
-                format!("{seconds}с")
+                crate::tr!(language, "{seconds}s", "{seconds}с")
             }
         }
         _ => "—".into(),
@@ -1037,10 +1325,120 @@ mod tests {
 
     fn state() -> State {
         let mut state = State::new("gitlab.example.org".into(), true);
+        state.language = Language::Ru;
         state.rows = vec![
             json!({"id":1,"name":"api-gateway","path_with_namespace":"platform/core/api-gateway","visibility":"private","description":"Единая точка входа","default_branch":"main"}),
         ];
         state
+    }
+
+    #[test]
+    fn english_labels_are_selected_without_translating_content() {
+        let mut state = state();
+        state.language = crate::i18n::Language::En;
+        state.rows[0]["description"] = json!("User project content");
+        let text = render(&state, 160, 48);
+        assert!(text.contains("Projects"));
+        assert!(text.contains("User project content"));
+        assert!(
+            !text
+                .chars()
+                .any(|c| ('А'..='я').contains(&c) || c == 'Ё' || c == 'ё')
+        );
+        state.language = crate::i18n::Language::Ru;
+        assert!(render(&state, 160, 48).contains("Проекты"));
+    }
+
+    #[test]
+    fn every_screen_and_dialog_localizes_only_owned_text() {
+        let mut state = state();
+        state.language = Language::En;
+        let row = json!({"id":1,"iid":7,"name":"sample-project","path_with_namespace":"group/sample-project","description":"User content","title":"Merge request title","visibility":"private","default_branch":"main","status":"success","state":"opened","type":"tree","path":"src","mode":"040000","ref":"main","duration":125,"source_branch":"feature","target_branch":"main","author":{"username":"someone"}});
+        state.rows = vec![row.clone()];
+        state.context.project = Some(row.clone());
+        state.context.mr = Some(row.clone());
+        state.context.job = Some(row.clone());
+        state.context.file = Some(row.clone());
+        state.context.pipeline = Some(row.clone());
+        state.object = row;
+        state.text = "User log output\nSecond line".into();
+        let assert_english = |text: String| {
+            assert!(
+                !text
+                    .chars()
+                    .any(|c| ('А'..='я').contains(&c) || matches!(c, 'Ё' | 'ё')),
+                "{text}"
+            );
+        };
+        for view in [
+            View::Projects,
+            View::Groups,
+            View::Favorites,
+            View::Overview,
+            View::Repository,
+            View::File,
+            View::MergeRequests,
+            View::MrDetails,
+            View::MrDiff,
+            View::MrNotes,
+            View::Pipelines,
+            View::Jobs,
+            View::Trace,
+            View::Settings,
+            View::Branches,
+        ] {
+            state.context.view = view;
+            for (width, height) in [(160, 48), (100, 32), (80, 24), (72, 22)] {
+                assert_english(render(&state, width, height));
+            }
+        }
+        state.context.view = View::Settings;
+        for (index, setting) in SETTINGS.iter().enumerate() {
+            state.selected = index;
+            state.object[setting.key] = match setting.kind {
+                SettingKind::Text { .. } => json!("Plain text"),
+                SettingKind::Choice(values) => json!(values[0]),
+                SettingKind::Bool => json!(true),
+                SettingKind::Number { min } => json!(min),
+            };
+            state.focus = Focus::Details;
+            assert_english(render(&state, 160, 48));
+            state.focus = Focus::Main;
+            assert_english(render(&state, 100, 32));
+        }
+        for popup in [
+            Popup::Help,
+            Popup::Input {
+                title: "Project description".into(),
+                value: "Unchanged value".into(),
+                purpose: crate::model::InputPurpose::Setting(1),
+            },
+            Popup::Confirm {
+                title: "Apply change?".into(),
+                body: "Project: group/sample-project\nBefore: old\nAfter: new".into(),
+                request: Request::post("projects/1/jobs/2/retry"),
+            },
+        ] {
+            state.popup = Some(popup);
+            for (width, height) in [(160, 48), (100, 32), (80, 24), (72, 22)] {
+                assert_english(render(&state, width, height));
+            }
+        }
+        state.popup = None;
+        state.context.view = View::Favorites;
+        state.rows.clear();
+        for loading in [false, true] {
+            state.loading = loading;
+            assert_english(render(&state, 100, 32));
+        }
+        state.loading = false;
+        state.error = Some("Network error".into());
+        assert_english(render(&state, 160, 48));
+        state.context.view = View::Projects;
+        state.rows = vec![
+            json!({"id":1,"name":"Имя пользователя","description":"User content","path_with_namespace":"group/project"}),
+        ];
+        assert!(render(&state, 160, 48).contains("Имя пользователя"));
     }
 
     #[test]
