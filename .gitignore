@@ -6,3 +6,7 @@
 /docs/plans/
 /docs/verification.md
 /docs/solutions/
+
+# Результаты проверок и релизной упаковки
+/dist/
+__pycache__/

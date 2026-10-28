@@ -4,6 +4,7 @@ version = "0.3.0"
 edition = "2024"
 authors = ["Igor Kramar <i@ikramar.ru>"]
 description = "A terminal workspace for GitHub and GitLab"
+license = "MIT"
 repository = "https://github.com/IgorKramar/forge-deck"
 homepage = "https://github.com/IgorKramar/forge-deck"
 readme = "README.md"
