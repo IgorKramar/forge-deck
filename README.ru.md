@@ -225,6 +225,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
 python3 tests/terminal_smoke.py target/release/forge-deck
+python3 tests/provider_hosts.py target/release/forge-deck
 ```
 
 Тесты используют демоданные и подставной CLI. Проверка PTY охватывает обе платформы и оба языка при трёх размерах терминала. Реальные репозитории при этих проверках не изменяются.

@@ -58,6 +58,20 @@ struct Work {
     cancel: Arc<AtomicBool>,
 }
 
+fn connection_host(preferences: &Preferences, provider: Provider) -> String {
+    preferences
+        .host_for(provider)
+        .or_else(|| {
+            std::env::var(if provider == Provider::Github {
+                "GH_HOST"
+            } else {
+                "GITLAB_HOST"
+            })
+            .ok()
+        })
+        .unwrap_or_else(|| provider.default_host().into())
+}
+
 fn effects(
     app: &mut App,
     list: Vec<Effect>,
@@ -99,9 +113,7 @@ fn effects(
                 let host = if app.state.demo {
                     provider.demo_host().into()
                 } else {
-                    preferences
-                        .host_for(provider)
-                        .unwrap_or_else(|| provider.default_host().into())
+                    connection_host(preferences, provider)
                 };
                 let next = app.connect(provider, host);
                 if effects(app, next, sender, preferences) {
@@ -251,17 +263,7 @@ fn main() {
             if args.demo {
                 provider.demo_host().into()
             } else {
-                preferences
-                    .host_for(provider)
-                    .or_else(|| {
-                        std::env::var(if provider == Provider::Github {
-                            "GH_HOST"
-                        } else {
-                            "GITLAB_HOST"
-                        })
-                        .ok()
-                    })
-                    .unwrap_or_else(|| provider.default_host().into())
+                connection_host(&preferences, provider)
             }
         });
         let mut app = App::new(host.clone(), args.demo);

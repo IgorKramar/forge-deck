@@ -376,6 +376,10 @@ impl App {
     }
 
     pub fn connect(&mut self, provider: Provider, host: String) -> Vec<Effect> {
+        if let Err(error) = crate::api::validate_host(&host) {
+            self.state.error = Some(self.state.language.error_message(&error));
+            return Vec::new();
+        }
         self.cancel();
         self.history.clear();
         self.unknown_change = None;
