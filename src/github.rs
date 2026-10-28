@@ -4,43 +4,37 @@ use crate::{
 };
 use serde_json::{Value, json};
 
+pub(crate) fn route(endpoint: &str) -> (&'static str, Option<&'static str>) {
+    let path = endpoint.split('?').next().unwrap_or(endpoint);
+    let parts: Vec<_> = path.split('/').collect();
+    match parts.as_slice() {
+        ["search", "issues"] => ("pull", Some("items")),
+        ["search", "repositories"] => ("repo", Some("items")),
+        ["user", "orgs"] => ("org", None),
+        ["repos", _, _, rest @ ..] => match rest {
+            ["contents", ..] => ("file", None),
+            ["branches", ..] => ("branch", None),
+            ["pulls"] => ("pull", None),
+            ["pulls", _] => ("pull_detail", None),
+            ["pulls", _, "files"] => ("diff", None),
+            ["issues", _, "comments"] | ["pulls", _, "comments"] => ("note", None),
+            ["actions", "runs"] => ("run", Some("workflow_runs")),
+            ["actions", "runs", _, "jobs"] => ("job", Some("jobs")),
+            ["actions", "runs", _, ..] => ("run", None),
+            ["actions", "jobs", _, ..] => ("job", None),
+            ["git", "blobs", _] => ("blob", None),
+            _ => ("repo", None),
+        },
+        _ => ("repo", None),
+    }
+}
+
 // Сохраняем нативные поля: изменяющие запросы используют ключи провайдера.
 pub(crate) fn normalize(endpoint: &str, mut value: Value) -> Value {
     let path = endpoint.split('?').next().unwrap_or(endpoint);
-    let kind = if path.ends_with("/comments") {
-        "note"
-    } else if path == "search/issues" || path.contains("/pulls") && !path.ends_with("/files") {
-        "pull"
-    } else if path.ends_with("/files") {
-        "diff"
-    } else if path.contains("/contents") {
-        "file"
-    } else if path.contains("/branches") {
-        "branch"
-    } else if path.ends_with("/jobs") || path.contains("/actions/jobs/") {
-        "job"
-    } else if path.contains("/actions/runs") {
-        "run"
-    } else if path == "user/orgs" {
-        "org"
-    } else {
-        "repo"
-    };
-    if matches!(path, "search/issues" | "search/repositories") {
-        value = value
-            .get_mut("items")
-            .map(Value::take)
-            .unwrap_or(Value::Null);
-    } else if path.ends_with("/actions/runs") {
-        value = value
-            .get_mut("workflow_runs")
-            .map(Value::take)
-            .unwrap_or(Value::Null);
-    } else if path.ends_with("/jobs") {
-        value = value
-            .get_mut("jobs")
-            .map(Value::take)
-            .unwrap_or(Value::Null);
+    let (kind, envelope) = route(endpoint);
+    if let Some(key) = envelope {
+        value = value.get_mut(key).map(Value::take).unwrap_or(Value::Null);
     }
     if kind == "file"
         && let Value::Array(rows) = value
@@ -120,7 +114,7 @@ fn normalize_row(kind: &str, path: &str, value: &mut Value) {
                     .into();
             }
         }
-        "pull" => {
+        "pull" | "pull_detail" => {
             copy(value, "iid", "number");
             copy(value, "description", "body");
             value["author"] = json!({"name":value.pointer("/user/login").cloned().unwrap_or(Value::Null),"username":value.pointer("/user/login").cloned().unwrap_or(Value::Null)});
@@ -133,17 +127,35 @@ fn normalize_row(kind: &str, path: &str, value: &mut Value) {
             if value["state"] == "open" {
                 value["state"] = "opened".into();
             }
-            let full_name = value
-                .get("repository_url")
-                .and_then(Value::as_str)
-                .and_then(|url| url.split_once("/repos/").map(|(_, repo)| repo.to_owned()))
+            let project = value
+                .pointer("/base/repo")
+                .filter(|repo| {
+                    repo["id"].as_u64().is_some_and(|id| id > 0)
+                        && repo["full_name"].as_str().is_some()
+                })
+                .cloned();
+            let full_name = project
+                .as_ref()
+                .and_then(|repo| repo["full_name"].as_str())
+                .map(str::to_owned)
                 .or_else(|| {
-                    path.strip_prefix("repos/")
-                        .and_then(|s| s.split_once("/pulls").map(|(repo, _)| repo.to_owned()))
+                    value
+                        .get("repository_url")
+                        .and_then(Value::as_str)
+                        .and_then(|url| url.split_once("/repos/").map(|(_, repo)| repo.to_owned()))
+                })
+                .or_else(|| {
+                    let parts: Vec<_> = path.split('/').collect();
+                    match parts.as_slice() {
+                        ["repos", owner, repo, "pulls", ..] => Some(format!("{owner}/{repo}")),
+                        _ => None,
+                    }
                 });
             if let Some(repo) = full_name {
                 value["references"] = json!({"full":format!("{}!{}", repo, value["number"])});
-                value["_project"] = json!({"id":0,"name":repo.rsplit('/').next().unwrap_or(&repo),"full_name":repo,"path_with_namespace":repo});
+                let mut project = project.unwrap_or_else(||json!({"id":0,"name":repo.rsplit('/').next().unwrap_or(&repo),"full_name":repo}));
+                normalize_row("repo", path, &mut project);
+                value["_project"] = project;
             }
             if let Some(labels) = value.get_mut("labels").and_then(Value::as_array_mut) {
                 for label in labels {
@@ -467,7 +479,13 @@ impl GitHubDemo {
         Err(invalid())
     }
     fn pull(&self, repository: &str) -> Value {
-        json!({"id":501,"number":42,"title":self.language.text("Refine upstream retries","Уточнить повторы запросов к upstream"),"body":self.language.text("Add a bounded retry budget and timeout checks.\n\n## Checks\n- cargo test\n- cargo clippy","Ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy"),"state":"open","draft":false,"head":{"ref":"feat/retry-budget"},"base":{"ref":"main"},"user":{"login":"demo"},"labels":[{"name":"backend"},{"name":"review"}],"html_url":format!("https://github.com/demo/{repository}/pull/42"),"repository_url":format!("https://api.github.com/repos/demo/{repository}"),"created_at":"2026-10-28T01:30:00Z","updated_at":"2026-10-28T02:30:00Z"})
+        let repo = self
+            .repositories
+            .iter()
+            .find(|repo| repo["name"] == repository)
+            .cloned()
+            .unwrap_or(Value::Null);
+        json!({"id":501,"number":42,"title":self.language.text("Refine upstream retries","Уточнить повторы запросов к upstream"),"body":self.language.text("Add a bounded retry budget and timeout checks.\n\n## Checks\n- cargo test\n- cargo clippy","Ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy"),"state":"open","draft":false,"head":{"ref":"feat/retry-budget"},"base":{"ref":"main","repo":repo},"user":{"login":"demo"},"labels":[{"name":"backend"},{"name":"review"}],"html_url":format!("https://github.com/demo/{repository}/pull/42"),"repository_url":format!("https://api.github.com/repos/demo/{repository}"),"created_at":"2026-10-28T01:30:00Z","updated_at":"2026-10-28T02:30:00Z"})
     }
 }
 fn page(mut values: Vec<Value>, query: &str) -> Vec<Value> {
@@ -565,6 +583,19 @@ mod tests {
         );
         assert_eq!(runs[0]["status"], "failed");
         assert_eq!(runs[0]["ref"], "main");
+        let jobs = normalize(
+            "repos/pulls/contents/actions/runs/7/jobs",
+            json!({"jobs":[{"id":8,"status":"completed","conclusion":"success"}]}),
+        );
+        assert_eq!(jobs[0]["id"], 8);
+        assert_eq!(jobs[0]["stage"], "Actions");
+        let pull = normalize(
+            "repos/pulls/contents/pulls/42",
+            json!({"number":42,"base":{"ref":"main","repo":{"id":101,"name":"contents","full_name":"pulls/contents"}}}),
+        );
+        assert_eq!(pull["_project"]["id"], 101);
+        assert_eq!(pull["_project"]["path_with_namespace"], "pulls/contents");
+
         let notes = normalize(
             "repos/a/b/issues/42/comments",
             json!([{"body":"Текст","user":{"login":"igor"}}]),
@@ -590,6 +621,32 @@ mod tests {
         );
         assert_eq!(diff[0]["collapsed"], true);
         assert_eq!(diff[0]["diff"], "");
+        for repository in ["demo/deck", "pulls/contents", "contents/jobs", "git/blobs"] {
+            for directory in [
+                "files",
+                "comments",
+                "jobs",
+                "branches",
+                "pulls",
+                "actions/runs",
+            ] {
+                let endpoint =
+                    format!("repos/{repository}/contents/{directory}?per_page=50&page=1");
+                let rows = normalize(
+                    &endpoint,
+                    json!([{"name":"test.rs","path":format!("{directory}/test.rs"),"sha":"123","type":"file"}]),
+                );
+                assert_eq!(rows[0]["id"], "123", "{endpoint}: {rows}");
+                assert_eq!(rows[0]["type"], "blob", "{endpoint}");
+            }
+            let endpoint = format!("repos/{repository}");
+            let repo = normalize(
+                &endpoint,
+                json!({"id":101,"name":"deck","full_name":repository}),
+            );
+            assert_eq!(repo["id"], 101, "{endpoint}: {repo}");
+            assert_eq!(repo["path_with_namespace"], repository, "{endpoint}");
+        }
     }
 
     #[test]

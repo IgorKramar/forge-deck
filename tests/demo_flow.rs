@@ -205,6 +205,15 @@ fn github_navigation_settings_and_ci_follow_native_contracts() {
             "demo/api-gateway"
         );
         assert_eq!(app.state.context.view, View::MrDetails);
+        assert_eq!(app.state.project_id(), Some(101));
+        press(&mut app, &mut api, KeyCode::Char('*'));
+        assert!(app.state.favorites.contains(&101));
+        press(&mut app, &mut api, KeyCode::Char('p'));
+        press(&mut app, &mut api, KeyCode::Char('*'));
+        assert!(!app.state.favorites.contains(&101));
+        press(&mut app, &mut api, KeyCode::Char('f'));
+        press(&mut app, &mut api, KeyCode::Char('*'));
+        assert!(app.state.favorites.contains(&101));
         let old = app.refresh();
         let old_id = old
             .iter()

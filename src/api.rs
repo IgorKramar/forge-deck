@@ -163,7 +163,8 @@ impl Api {
             } => self.json(endpoint, *method, body.as_ref(), cancel, deadline),
             Request::Text { endpoint } => {
                 let captured = self.run(endpoint, Method::Get, None, cancel, deadline)?;
-                if (endpoint.contains("/repository/blobs/") || endpoint.contains("/git/blobs/"))
+                if ((self.provider == Provider::Gitlab && endpoint.contains("/repository/blobs/"))
+                    || (self.provider == Provider::Github && github::route(endpoint).0 == "blob"))
                     && (captured.stdout.bytes.contains(&0)
                         || std::str::from_utf8(&captured.stdout.bytes).is_err())
                 {
@@ -186,6 +187,7 @@ impl Api {
             Request::Projects(ids) => {
                 let mut projects = Vec::with_capacity(ids.len());
                 for id in ids {
+                    // shortcut: GitHub использует недокументированный lookup по ID; хранить owner/name, если маршрут удалят.
                     let response = self.json(
                         &format!(
                             "{}/{id}",
@@ -234,7 +236,7 @@ impl Api {
                 method != Method::Get,
             ));
         }
-        let value = if self.provider == Provider::Github
+        let mut value = if self.provider == Provider::Github
             && method != Method::Get
             && captured.stdout.bytes.iter().all(u8::is_ascii_whitespace)
         {
@@ -254,6 +256,35 @@ impl Api {
                 ),
                 false,
             ));
+        }
+        if self.provider == Provider::Github
+            && method == Method::Get
+            && github::route(endpoint).0 == "pull_detail"
+            && value.is_object()
+            && (!value
+                .pointer("/base/repo/id")
+                .and_then(Value::as_u64)
+                .is_some_and(|id| id > 0)
+                || value
+                    .pointer("/base/repo/full_name")
+                    .and_then(Value::as_str)
+                    .is_none())
+        {
+            let path = endpoint.split('?').next().unwrap_or(endpoint);
+            let (repository, _) = path.rsplit_once("/pulls/").unwrap();
+            let Response::Json(repo) =
+                self.json(repository, Method::Get, None, cancel, deadline)?
+            else {
+                unreachable!()
+            };
+            if !repo["id"].as_u64().is_some_and(|id| id > 0) || repo["full_name"].as_str().is_none()
+            {
+                return Err(error("GitLab вернул некорректный JSON", false));
+            }
+            if !value["base"].is_object() {
+                value["base"] = serde_json::json!({});
+            }
+            value["base"]["repo"] = repo;
         }
         Ok(Response::Json(if self.provider == Provider::Github {
             github::normalize(endpoint, value)
@@ -287,7 +318,7 @@ impl Api {
         if self.provider == Provider::Github {
             command.args([
                 "--header",
-                if endpoint.contains("/git/blobs/") {
+                if github::route(endpoint).0 == "blob" {
                     "Accept: application/vnd.github.raw+json"
                 } else {
                     "Accept: application/vnd.github+json"
@@ -309,7 +340,11 @@ impl Api {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = command.spawn().map_err(|e| {
+        let child = {
+            #[cfg(test)]
+            let _fixture_lock = tests::CLI_FILE_LOCK.lock().unwrap();
+            command.spawn()
+        }.map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 error("Не найден glab. Установите GitLab CLI и выполните glab auth login для выбранного сервера.", false)
             } else {
@@ -641,12 +676,16 @@ mod tests {
     use serde_json::json;
     use std::{fs, os::unix::fs::PermissionsExt, sync::Arc, time::SystemTime};
 
+    // fork соседнего теста не должен унаследовать дескриптор записи новой фикстуры.
+    pub(super) static CLI_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct FakeCli {
         directory: PathBuf,
         path: PathBuf,
     }
     impl FakeCli {
         fn new(body: &str) -> Self {
+            let _fixture_lock = CLI_FILE_LOCK.lock().unwrap();
             let unique = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
@@ -715,6 +754,47 @@ mod tests {
             .unwrap(),
             Response::Json(Value::Null)
         ));
+    }
+
+    #[test]
+    fn github_blob_media_and_missing_pull_repository_use_structural_routes() {
+        let fake = FakeCli::new(
+            "import json,sys\nep=sys.argv[-1]\nif ep=='repos/git/blobs/actions/jobs/7/logs':\n assert 'Accept: application/vnd.github+json' in sys.argv\n sys.stdout.buffer.write(b'log\\x00tail')\nelif ep=='repos/demo/pulls/git/blobs/123':\n assert 'Accept: application/vnd.github.raw+json' in sys.argv\n sys.stdout.buffer.write(b'file\\x00data')\nelif ep=='repos/demo/deck/pulls/42':\n print(json.dumps({'number':42,'title':'Мой PR','base':{'ref':'main'},'repository_url':'https://api.github.com/repos/demo/deck'}))\nelif ep=='repos/demo/deck':\n print(json.dumps({'id':101,'name':'deck','full_name':'demo/deck','default_branch':'main'}))\nelse: raise AssertionError(ep)",
+        );
+        let mut api = Api::new_for("github.com", false, Language::En, Provider::Github).unwrap();
+        api.program = fake.path.clone();
+        let Response::Text { body, .. } = api
+            .execute(
+                &Request::text("repos/git/blobs/actions/jobs/7/logs"),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(body, "logtail");
+        let Response::Text { body, .. } = api
+            .execute(
+                &Request::text("repos/demo/pulls/git/blobs/123"),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(body.starts_with("Binary file:"));
+        let Response::Json(pull) = api
+            .execute(
+                &Request::get("repos/demo/deck/pulls/42"),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(pull["_project"]["id"], 101);
+        assert_eq!(pull["_project"]["path_with_namespace"], "demo/deck");
+        assert_eq!(pull["title"], "Мой PR");
     }
 
     #[test]

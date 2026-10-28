@@ -1457,6 +1457,13 @@ impl App {
                     }
                     self.state.object = value.clone();
                     if view == View::MrDetails {
+                        if self.state.provider == Provider::Github
+                            && let Some(project) = value
+                                .get("_project")
+                                .filter(|project| number(project, "id") > 0)
+                        {
+                            self.state.context.project = Some(project.clone());
+                        }
                         self.state.context.mr = Some(value.clone());
                         self.state.text = crate::tr!(
                             self.state.language,
