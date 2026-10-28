@@ -5,7 +5,7 @@ fn cli_saved_language_and_locale_have_explicit_priority() {
     let directory = std::env::temp_dir().join(format!("deck-cli-language-{}", std::process::id()));
     fs::create_dir_all(&directory).unwrap();
     let run = |arguments: &[&str], locale: &str| {
-        Command::new(env!("CARGO_BIN_EXE_gitlab-deck"))
+        Command::new(env!("CARGO_BIN_EXE_forge-deck"))
             .args(arguments)
             .env("XDG_CONFIG_HOME", &directory)
             .env("LC_ALL", "")
@@ -15,7 +15,7 @@ fn cli_saved_language_and_locale_have_explicit_priority() {
             .unwrap()
     };
     let check = ["--demo", "--check"];
-    let all = Command::new(env!("CARGO_BIN_EXE_gitlab-deck"))
+    let all = Command::new(env!("CARGO_BIN_EXE_forge-deck"))
         .args(check)
         .env("XDG_CONFIG_HOME", &directory)
         .env("LC_ALL", "C.UTF-8")
@@ -83,4 +83,23 @@ fn cli_saved_language_and_locale_have_explicit_priority() {
     );
     assert_eq!(run(&["--provider", "bad"], "").status.code(), Some(2));
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn legacy_command_launches_the_same_version() {
+    let current = Command::new(env!("CARGO_BIN_EXE_forge-deck"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    let legacy = Command::new(env!("CARGO_BIN_EXE_gitlab-deck"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(current.status.success() && legacy.status.success());
+    assert_eq!(current.stdout, legacy.stdout);
+    assert!(
+        String::from_utf8(current.stdout)
+            .unwrap()
+            .contains(env!("CARGO_PKG_VERSION"))
+    );
 }

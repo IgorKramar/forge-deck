@@ -69,7 +69,7 @@ def smoke(binary, columns, rows, language, provider):
 
 
 if __name__ == "__main__":
-    executable = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/gitlab-deck").resolve()
+    executable = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/forge-deck").resolve()
     for provider in ["gitlab","github"]:
         for language in ["en", "ru"]:
             for size in [(160, 48), (100, 32), (72, 22)]:

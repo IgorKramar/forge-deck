@@ -1,53 +1,66 @@
 <div align="center">
 
-# GitLab Deck
+# Forge Deck
 
 **English** · [Русский](README.ru.md)
 
-### GitLab, in your terminal.
+### GitHub & GitLab. One terminal workspace.
 
-Projects · code · merge requests · CI/CD
+Repositories · pull & merge requests · Actions & pipelines
 
-![Version](https://img.shields.io/badge/version-0.2.0-7aa2f7?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.3.0-7aa2f7?style=flat-square)
 ![Rust](https://img.shields.io/badge/built_with-Rust-e0af68?style=flat-square)
 ![Linux](https://img.shields.io/badge/platform-Linux-9ece6a?style=flat-square)
 ![Tokyo Night](https://img.shields.io/badge/theme-Tokyo_Night-bb9af7?style=flat-square)
 
-[Install](#install) · [Quick start](#quick-start) · [Language](#interface-language) · [Keys](#keys) · [Features and limits](#features-and-limits)
+[Install](#install) · [Quick start](#quick-start) · [Language](#interface-language) · [Keys](#keys) · [Limits](#features-and-limits)
 
 </div>
 
-![Project catalog in GitLab Deck](docs/screenshots/projects.png)
+![GitHub repositories in Forge Deck](docs/screenshots/github/projects.png)
 
-**Find a project, review an MR, and follow a pipeline down to its job log — all from your terminal.**
-GitLab Deck is a standalone Rust TUI client for GitLab.com and self-managed GitLab servers. No local checkout required. Sign in with the `glab` you already use.
+**Find a repository, review a change, and follow CI down to its job log — all from your terminal.**
+Forge Deck is a standalone Rust TUI for GitHub, GitHub Enterprise, GitLab.com, and self-managed GitLab. No local checkout required. Authentication stays with the `gh` and `glab` you already use.
+
+Tokyo Night colors, Nerd Font icons, rounded panels, room to breathe, and a clear focus indicator. Press **`G`** to switch platforms; your server and favorites are remembered separately.
 
 ## What's inside
 
-| Area | Features |
-|:---|:---|
-| **Projects and groups** | Available projects, group projects, search, pagination, and local favorites |
-| **Repository** | Browse directories, text files, and branches without cloning |
-| **Merge requests** | Open MRs, descriptions, diffs, comments, and text search |
-| **CI/CD** | Pipelines → jobs → logs; retry, cancel, and start manual jobs |
-| **Settings** | Edit project settings with input validation and a confirmation for each change |
-| **Terminal** | Tokyo Night, Nerd Font icons, rounded panels, padding, and a clear focus indicator |
+| Area | GitHub | GitLab |
+|:---|:---|:---|
+| **Browse** | Accessible repositories, organizations, repository search | Projects, groups, group projects, search |
+| **Code** | Directories, text files, branches | Directories, text files, branches |
+| **Review** | Open PRs, descriptions, file patches, general PR comments; global PRs involving you | Open MRs, descriptions, diffs, comments; global MR list |
+| **CI** | Actions runs → jobs → logs; rerun a run or job, cancel a run | Pipelines → jobs → logs; retry, cancel, start manual jobs |
+| **Settings** | Eight repository settings, administrator access required | Fifteen project settings, Maintainer/Owner required |
+| **Workspace** | Local favorites, paging, EN/RU | Local favorites, paging, EN/RU |
 
 <details>
-<summary><strong>Explore CI/CD</strong></summary>
+<summary><strong>Follow GitHub Actions</strong></summary>
 
-![Pipelines in GitLab Deck](docs/screenshots/pipelines.png)
+![GitHub Actions in Forge Deck](docs/screenshots/github/pipelines.png)
 
-`p` → select a pipeline → `Enter` → select a job → `Enter` → read its log.
+`p` → select a run → `Enter` → select a job → `Enter` → read its log.
+
+Rerunning a GitHub job also reruns its dependent jobs. GitHub cancellation applies to the whole workflow run; individual job cancellation and GitLab-style manual jobs are unavailable.
 
 </details>
 
 <details>
-<summary><strong>Explore project settings</strong></summary>
+<summary><strong>Keep GitLab close</strong></summary>
 
-![Project settings in GitLab Deck](docs/screenshots/settings.png)
+![GitLab pipelines in Forge Deck](docs/screenshots/pipelines.png)
 
-`e` → edit a field → check the old and new values → confirm or press `Esc`.
+The same navigation, native GitLab actions. `G` switches back to your saved GitLab connection.
+
+</details>
+
+<details>
+<summary><strong>Change a setting deliberately</strong></summary>
+
+![GitHub repository settings in Forge Deck](docs/screenshots/github/settings.png)
+
+`e` → edit one field → inspect the old and new values → confirm or press `Esc`.
 
 </details>
 
@@ -55,152 +68,168 @@ GitLab Deck is a standalone Rust TUI client for GitLab.com and self-managed GitL
 
 ## Install
 
-You need **Linux**, a current stable **Rust** toolchain, Git, and [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/).
+You need **Linux**, a current stable **Rust** toolchain, Git, and the CLI for the platform you use: [GitHub CLI (`gh`)](https://cli.github.com/) and/or [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/).
 
 ```sh
-cargo install --git https://github.com/IgorKramar/gitlab-deck --locked
+cargo install --git https://github.com/IgorKramar/forge-deck --locked
 ```
 
-Cargo installs the `gitlab-deck` binary in its `bin` directory, usually `~/.cargo/bin`. Make sure it is in your `PATH`.
+Cargo installs `forge-deck` and the compatible `gitlab-deck` command, usually in `~/.cargo/bin`. Keep that directory in your `PATH`.
 
 <details>
 <summary>Build from source</summary>
 
 ```sh
-git clone https://github.com/IgorKramar/gitlab-deck.git
-cd gitlab-deck
+git clone https://github.com/IgorKramar/forge-deck.git
+cd forge-deck
 cargo install --path . --locked
 ```
 
 </details>
 
-For the look shown above, use a true-color terminal and a [Nerd Font](https://www.nerdfonts.com/). The minimum size is **80 × 24**; use `Tab` to switch panels in narrow windows.
+Use a true-color terminal and a [Nerd Font](https://www.nerdfonts.com/) for the look above. Minimum size: **80 × 24**. In narrow windows, `Tab` brings the sidebar or preview into focus.
 
 ## Quick start
 
-### Try it first
+### Try either platform offline
 
 ```sh
-gitlab-deck --demo --lang en
+forge-deck --demo --provider github --lang en
+forge-deck --demo --provider gitlab --lang en
 ```
 
-Demo mode needs no network or credentials. Browse screens, edit settings, and start manual jobs. Demo changes last until you exit; your settings file stays unchanged.
+Demo mode needs no network or credentials and leaves your settings file unchanged. Changes live in memory; reconnecting or switching platforms resets demo data.
 
-### Connect to GitLab
+### GitHub
+
+```sh
+gh auth login --hostname github.com
+forge-deck --provider github
+```
+
+For GitHub Enterprise, authenticate with its hostname and pass it with `--host`:
+
+```sh
+gh auth login --hostname github.example.org
+forge-deck --provider github --host github.example.org
+```
+
+### GitLab
 
 ```sh
 glab auth login --hostname gitlab.example.org
-gitlab-deck --host gitlab.example.org
+forge-deck --provider gitlab --host gitlab.example.org
 ```
 
-For GitLab.com, use `--hostname gitlab.com` and `--host gitlab.com`. If `glab` is already authenticated with your server, just run the second command.
+Use `gitlab.com` for GitLab.com. If the CLI is already authenticated, skip its login command.
 
-The server is remembered, so subsequent launches only need:
+Subsequent launches restore the selected platform and its server:
 
 ```sh
-gitlab-deck
+forge-deck
 ```
 
-Check the connection without opening the TUI:
+Press `G` to switch between GitHub and GitLab, or `H` to change the current platform's server. Check a connection without opening the TUI:
 
 ```sh
-gitlab-deck --check
+forge-deck --provider github --check
+forge-deck --provider gitlab --check
 ```
+
+### Upgrading from GitLab Deck
+
+The project was renamed to **Forge Deck** in 0.3.0. The `gitlab-deck` command still works. If no new settings file exists, Forge Deck reads your old GitLab Deck settings, retaining language, server, favorites, and unknown fields. The original file is left unchanged; normal mode saves to the new path.
 
 ## Interface language
 
-English and Russian are available:
-
 ```sh
-gitlab-deck --demo --lang en
-gitlab-deck --lang ru
+forge-deck --lang en
+forge-deck --lang ru
 ```
 
-Press `L` to switch between EN/RU in the TUI and refresh the current screen. Normal mode saves your choice; demo mode leaves your settings unchanged.
+`L` switches EN/RU, refreshes the screen, and saves your choice in normal mode. Demo mode does not save preferences.
 
-Language priority is `--lang` → saved language → system locale → English. Locale detection uses the first non-empty value of `LC_ALL`, `LC_MESSAGES`, and `LANG`: a `ru` locale selects Russian; other locales select English.
+Priority: `--lang` → saved language → system locale → English. Locale detection uses the first non-empty `LC_ALL`, `LC_MESSAGES`, or `LANG`: `ru` selects Russian; other locales select English.
 
-Only application labels change. GitLab project names, comments, diffs, and logs keep their original content. Demo data is initialized in the language selected at startup. Command-line help remains in English.
+Application labels are translated. Repository contents, comments, diffs, and logs keep their original text. Demo content uses the language selected at startup. Command-line help is in English.
 
 ## Keys
 
 | Keys | Action |
 |:---|:---|
 | `j` / `k`, `↑` / `↓`, `PgUp` / `PgDn` | Select a row or scroll |
-| `←` / `→` in text | Scroll long lines horizontally |
-| `Tab` / `Shift+Tab` | Focus the sidebar, content, or details |
+| `←` / `→` in text | Scroll horizontally |
+| `Tab` / `Shift+Tab` | Focus sidebar / content / preview |
 | `Enter` / `Esc` | Open / go back |
-| `1` / `2` / `3` | Projects / groups / all open MRs |
-| `o` / `f` / `b` | Project overview / files / branches |
-| `m` / `p` / `s` | MRs / CI/CD / settings |
-| `d` / `c` inside an MR | Diff / comments |
-| `/` | Search; exact branch filter for pipelines |
-| `[` / `]` | Previous / next API page |
+| `1` / `2` / `3` | Repositories / organizations / involved PRs on GitHub; projects / groups / MRs on GitLab |
+| `o` / `f` / `b` | Overview / files / branches |
+| `m` / `p` / `s` | PRs or MRs / CI / settings |
+| `d` / `c` in a PR or MR | Diff / comments |
+| `/` | Search; exact branch filter for CI runs |
+| `[` / `]` | Previous / next page |
 | `n` / `N` in text | Next / previous match |
-| `*` | Add or remove a favorite project |
-| `R` / `F5` | Refresh data, including the current log |
-| `r` / `x` / `S` | Retry CI / cancel CI / start a manual job |
-| `e` in settings | Edit a field; `←/→` select a value, `Ctrl+U` clears input |
-| `H` | Switch servers |
+| `*` | Add or remove a favorite |
+| `R` / `F5` | Refresh the current screen or log |
+| `r` / `x` | Rerun / cancel CI, where supported |
+| `S` | Start a manual GitLab job |
+| `e` in settings | Edit a field; `←/→` choose a value, `Ctrl+U` clears input |
+| `G` / `H` | Switch platform / change server |
 | `L` | Switch EN/RU |
 | `?` / `q` | Help / quit |
 
-`q` closes an open dialog first. `Ctrl+C` exits the application.
+`q` closes an open dialog first. `Ctrl+C` exits.
 
 ## Features and limits
 
-**Changes need confirmation.** A settings change shows the project, field, and old and new values. A CI action shows the project, resource, and command. Press `Esc` to cancel. Editing settings requires the Maintainer or Owner role; GitLab makes the final permissions check.
+**Changes need confirmation.** Settings show the field and old/new values; CI actions show the repository, resource, and action. Only one field is written at a time. Unavailable fields cannot be edited. The server makes the final permission check.
 
 <details>
 <summary>Available settings</summary>
 
-- Project name, description, visibility, and default branch.
-- Merge method and squash policy.
-- Successful pipeline and resolved discussion requirements.
-- Source branch deletion after merging.
-- Access to issues, merge requests, wiki, and CI/CD.
-- Shared runners and job timeout.
+**GitHub:** description, default branch, deletion of branches after merging, merge commits, squash merging, rebase merging, issues, and wiki. Requires repository admin permissions and a token with the corresponding access.
 
-Only the selected field is changed. If the server does not return a field, the editor does not invent a value.
+**GitLab:** project name, description, visibility, default branch, merge method, squash policy, successful CI and resolved discussion requirements, source branch deletion, access levels for issues/MRs/wiki/CI, shared runners, and job timeout.
 
 </details>
 
-**Lists use pages of 50 records.** Files, jobs, and favorites are filtered on the current page. Use `[` / `]` to page through diffs and comments as well. Refresh logs manually with `R` / `F5`.
+**Lists use pages of 50 records.** Files, jobs, and favorites are filtered on the current page; GitHub organizations and branches also use page-local filtering. GitHub repository search searches accessible GitHub repositories rather than only the loaded catalog. The global PR list uses `involves:you`; it is not a list of every PR you can access.
 
-**Responses are limited to 2 MiB.** Oversized JSON is rejected; truncated text is clearly marked. GitLab may impose additional diff limits. Binary files are not displayed.
+**GitHub API limits apply.** Search exposes at most 1,000 results. Directory contents are paged locally from the Contents response, which is limited to 1,000 entries. PR file lists have a 3,000-file limit; some patches are omitted by GitHub. The comments screen shows general PR conversation, not inline review comments or review submissions. Job logs may be unavailable until the job completes. Refresh manually with `R` / `F5`.
 
-**Current limits.** GitHub, instance administration, user and group management, CI secrets, posting comments, and merging MRs are not supported. IPv6 server addresses are not supported.
+**Responses are limited to 2 MiB.** Oversized JSON is rejected; truncated text is marked. Binary files and GitHub submodule/symlink entries are not previewed. GitLab may impose additional diff limits.
+
+**Current limits.** No instance administration, organization/group/user management, CI secret editing, comment posting, or PR/MR merging. IPv6 server addresses are unsupported. GitHub favorites resolve numeric repository IDs through the currently available, undocumented `repositories/{id}` route.
 
 ## Credentials and local settings
 
-`glab` handles authentication. GitLab Deck does not create its own token store or pass tokens in process arguments. Terminal control sequences are removed from responses and logs before rendering.
+`gh` and `glab` own authentication. Forge Deck does not read their token files, create a token store, or pass tokens in process arguments. Terminal control sequences are removed from responses before rendering.
 
-The server, favorites, and interface language are stored in:
+Preferences live in:
 
 ```text
-$XDG_CONFIG_HOME/gitlab-deck/config.json
-# or ~/.config/gitlab-deck/config.json
+$XDG_CONFIG_HOME/forge-deck/config.json
+# or ~/.config/forge-deck/config.json
 ```
 
-Server priority is `--host` → saved setting → `GITLAB_HOST` → `gitlab.com`. Use `hostname[:port]`, without a scheme or path.
+The old `gitlab-deck/config.json` is read only when the new file is absent. Platform priority is `--provider` → saved platform → GitLab. Server priority is `--host` → saved server for that platform → `GH_HOST` / `GITLAB_HOST` → `github.com` / `gitlab.com`. Use `hostname[:port]`, without a scheme or path. Favorites are scoped to both platform and server.
 
-> If a connection fails during a change request, the outcome may be unknown. The application reloads data and displays a warning. Verify the result before retrying: exiting the TUI does not cancel an operation already sent to the server.
+> If a connection fails during a change, its outcome may be unknown. The app reloads data and keeps a warning. Verify the result before retrying: exiting does not cancel a server operation already sent.
 
 ## Development
 
-The interface uses [Ratatui](https://ratatui.rs/) and Crossterm; the transport uses `glab api`. One background worker handles requests, and request IDs prevent stale responses from replacing the current screen. See the [architecture decision](docs/adr/0001-terminal-and-authentication.md).
+[Ratatui](https://ratatui.rs/) and Crossterm render the UI; `gh api` / `glab api` handle REST transport. One background worker handles requests, with cancellation, timeouts, and generation IDs to reject stale results. See [authentication and terminal design](docs/adr/0001-terminal-and-authentication.md) and [GitHub integration](docs/adr/0002-multiple-forges.md).
 
 ```sh
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
-python3 tests/terminal_smoke.py target/release/gitlab-deck
+python3 tests/terminal_smoke.py target/release/forge-deck
 ```
 
-Tests use demo mode and a fake CLI. The PTY check covers navigation and terminal restoration at three sizes. These checks do not change real GitLab data.
+Tests use demo data and a fake CLI. PTY checks cover both platforms and languages at three terminal sizes. These checks do not change real repositories.
 
-Found a bug? [Open an issue](https://github.com/IgorKramar/gitlab-deck/issues) with the application version, terminal size, and reproduction steps. Leave private addresses, project contents, and tokens out of the report.
+Found a bug? [Open an issue](https://github.com/IgorKramar/forge-deck/issues) with the version, terminal size, and reproduction steps. Keep private addresses, repository contents, and tokens out of reports.
 
 ---
 

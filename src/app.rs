@@ -934,9 +934,7 @@ impl App {
             );
             return Vec::new();
         }
-        if self.state.provider == Provider::Github
-            && (action == "play" || (action == "cancel" && entity == "jobs"))
-        {
+        if self.state.provider == Provider::Github && action == "cancel" && entity == "jobs" {
             self.state.error=Some(self.state.language.text("GitHub supports canceling a workflow run, not individual jobs or manual job play", "GitHub поддерживает отмену запуска workflow, а не отдельной джобы или её ручной запуск").into());
             return Vec::new();
         }

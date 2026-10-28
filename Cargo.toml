@@ -1,14 +1,17 @@
 [package]
-name = "gitlab-deck"
-version = "0.2.0"
+name = "forge-deck"
+version = "0.3.0"
 edition = "2024"
 authors = ["Igor Kramar <i@ikramar.ru>"]
-description = "A standalone terminal client for GitLab"
-repository = "https://github.com/IgorKramar/gitlab-deck"
-homepage = "https://github.com/IgorKramar/gitlab-deck"
+description = "A terminal workspace for GitHub and GitLab"
+repository = "https://github.com/IgorKramar/forge-deck"
+homepage = "https://github.com/IgorKramar/forge-deck"
 readme = "README.md"
-keywords = ["gitlab", "tui", "terminal", "ci", "ratatui"]
+keywords = ["github", "gitlab", "tui", "terminal", "ratatui"]
 categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "gitlab_deck"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

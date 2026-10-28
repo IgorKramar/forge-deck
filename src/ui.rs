@@ -206,7 +206,7 @@ fn workspace(frame: &mut Frame, area: Rect, state: &State) {
     let show_details = state.focus == Focus::Details
         || (area.width >= 136 && !matches!(state.context.view, View::Overview));
     let sizes = [
-        Constraint::Length(if show_sidebar { 20 } else { 0 }),
+        Constraint::Length(if show_sidebar { 26 } else { 0 }),
         Constraint::Length(u16::from(show_sidebar)),
         Constraint::Min(30),
         Constraint::Length(u16::from(show_details)),
