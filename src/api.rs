@@ -1,7 +1,9 @@
 use crate::{
     demo::Demo,
+    github::{self, GitHubDemo},
     i18n::Language,
     model::{ApiError, Method, Request, Response},
+    provider::Provider,
 };
 use serde_json::Value;
 use std::{
@@ -17,6 +19,9 @@ use std::{
 
 pub struct Api {
     language: Language,
+    provider: Provider,
+    github_demo: Option<GitHubDemo>,
+    viewer: Option<String>,
     host: String,
     demo: Option<Demo>,
     program: PathBuf,
@@ -30,6 +35,15 @@ impl Api {
     }
 
     pub fn new_in(host: &str, demo: bool, language: Language) -> Result<Self, ApiError> {
+        Self::new_for(host, demo, language, Provider::Gitlab)
+    }
+
+    pub fn new_for(
+        host: &str,
+        demo: bool,
+        language: Language,
+        provider: Provider,
+    ) -> Result<Self, ApiError> {
         validate_host(host).map_err(|message| ApiError {
             message: language.error_message(&message),
             uncertain: false,
@@ -37,9 +51,12 @@ impl Api {
         })?;
         Ok(Self {
             language,
+            provider,
+            github_demo: (demo && provider == Provider::Github).then(|| GitHubDemo::new(language)),
+            viewer: None,
             host: host.to_owned(),
-            demo: demo.then(|| Demo::new(language)),
-            program: "glab".into(),
+            demo: (demo && provider == Provider::Gitlab).then(|| Demo::new(language)),
+            program: provider.cli().into(),
             timeout: Duration::from_secs(20),
             output_limit: 2 * 1024 * 1024,
         })
@@ -48,6 +65,9 @@ impl Api {
     pub fn set_language(&mut self, language: Language) {
         self.language = language;
         if let Some(demo) = &mut self.demo {
+            demo.set_language(language);
+        }
+        if let Some(demo) = &mut self.github_demo {
             demo.set_language(language);
         }
     }
@@ -59,6 +79,12 @@ impl Api {
     ) -> Result<Response, ApiError> {
         self.execute_inner(request, cancel).map_err(|mut error| {
             error.message = self.language.error_message(&error.message);
+            if self.provider == Provider::Github {
+                error.message = error
+                    .message
+                    .replace("GitLab", "GitHub")
+                    .replace("glab", "gh");
+            }
             error
         })
     }
@@ -74,7 +100,61 @@ impl Api {
         if let Some(demo) = &mut self.demo {
             return demo.execute(request).map(clean_response);
         }
+        if let Some(demo) = &mut self.github_demo {
+            return demo.execute(request).map(clean_response);
+        }
+        if self.provider == Provider::Github
+            && let Request::Json { endpoint, .. } = request
+            && endpoint.starts_with("search/")
+            && endpoint.split_once('?').is_some_and(|(_, query)| {
+                query.split('&').any(|part| {
+                    part.strip_prefix("page=")
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .is_some_and(|page| page > 20)
+                })
+            })
+        {
+            return Err(error(
+                self.language.text(
+                    "GitHub search is limited to the first 1,000 results. Narrow the search.",
+                    "Поиск GitHub ограничен первыми 1000 результатами. Уточните запрос.",
+                ),
+                false,
+            ));
+        }
         let deadline = Instant::now() + self.timeout;
+        let resolved;
+        let request = if self.provider == Provider::Github
+            && let Request::Json {
+                endpoint,
+                method,
+                body,
+            } = request
+            && endpoint.starts_with("search/issues?")
+            && endpoint.contains("involves%3A%40me")
+        {
+            if self.viewer.is_none() {
+                let Response::Json(user) =
+                    self.json("user", Method::Get, None, cancel, deadline)?
+                else {
+                    unreachable!()
+                };
+                let login = user
+                    .get("login")
+                    .and_then(Value::as_str)
+                    .filter(|login| !login.is_empty())
+                    .ok_or_else(|| error("GitLab вернул некорректный JSON", false))?;
+                self.viewer = Some(login.into());
+            }
+            resolved = Request::Json {
+                endpoint: github::viewer_query(endpoint, self.viewer.as_deref().unwrap()),
+                method: *method,
+                body: body.clone(),
+            };
+            &resolved
+        } else {
+            request
+        };
         let response = match request {
             Request::Json {
                 endpoint,
@@ -83,7 +163,7 @@ impl Api {
             } => self.json(endpoint, *method, body.as_ref(), cancel, deadline),
             Request::Text { endpoint } => {
                 let captured = self.run(endpoint, Method::Get, None, cancel, deadline)?;
-                if endpoint.contains("/repository/blobs/")
+                if (endpoint.contains("/repository/blobs/") || endpoint.contains("/git/blobs/"))
                     && (captured.stdout.bytes.contains(&0)
                         || std::str::from_utf8(&captured.stdout.bytes).is_err())
                 {
@@ -107,7 +187,14 @@ impl Api {
                 let mut projects = Vec::with_capacity(ids.len());
                 for id in ids {
                     let response = self.json(
-                        &format!("projects/{id}"),
+                        &format!(
+                            "{}/{id}",
+                            if self.provider == Provider::Github {
+                                "repositories"
+                            } else {
+                                "projects"
+                            }
+                        ),
                         Method::Get,
                         None,
                         cancel,
@@ -147,9 +234,32 @@ impl Api {
                 method != Method::Get,
             ));
         }
-        let value = serde_json::from_slice(&captured.stdout.bytes)
-            .map_err(|_| error("GitLab вернул некорректный JSON", method != Method::Get))?;
-        Ok(Response::Json(value))
+        let value = if self.provider == Provider::Github
+            && method != Method::Get
+            && captured.stdout.bytes.iter().all(u8::is_ascii_whitespace)
+        {
+            Value::Null
+        } else {
+            serde_json::from_slice(&captured.stdout.bytes)
+                .map_err(|_| error("GitLab вернул некорректный JSON", method != Method::Get))?
+        };
+        if self.provider == Provider::Github
+            && endpoint.starts_with("search/")
+            && value["incomplete_results"] == true
+        {
+            return Err(error(
+                self.language.text(
+                    "GitHub returned incomplete search results. Narrow the search and retry.",
+                    "GitHub вернул неполные результаты поиска. Уточните запрос и повторите.",
+                ),
+                false,
+            ));
+        }
+        Ok(Response::Json(if self.provider == Provider::Github {
+            github::normalize(endpoint, value)
+        } else {
+            value
+        }))
     }
 
     fn run(
@@ -174,6 +284,18 @@ impl Api {
         let mutation = method != Method::Get;
         let mut command = Command::new(&self.program);
         command.args(["api", "--hostname", &self.host, "--method", method.name()]);
+        if self.provider == Provider::Github {
+            command.args([
+                "--header",
+                if endpoint.contains("/git/blobs/") {
+                    "Accept: application/vnd.github.raw+json"
+                } else {
+                    "Accept: application/vnd.github+json"
+                },
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+            ]);
+        }
         if payload.is_some() {
             command.args(["--input", "-", "--header", "Content-Type: application/json"]);
         }
@@ -355,6 +477,11 @@ fn classify_error(stderr: &[u8], mutation: bool) -> ApiError {
     {
         error(
             "Нет авторизации GitLab. Выполните glab auth login для выбранного сервера.",
+            false,
+        )
+    } else if status("403") && message.contains("rate limit") {
+        error(
+            "Достигнут лимит запросов GitLab (429). Повторите чтение позже.",
             false,
         )
     } else if status("403") || message.contains("403 forbidden") {
@@ -543,6 +670,126 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn github_native_contract_and_empty_mutation_use_the_hardened_transport() {
+        let fake = FakeCli::new(
+            "import json,sys\nassert 'Accept: application/vnd.github+json' in sys.argv\nassert 'X-GitHub-Api-Version: 2022-11-28' in sys.argv\nif 'PATCH' in sys.argv:\n assert json.load(sys.stdin)=={'description':'Моё описание'}\n assert 'Моё описание' not in sys.argv\nelif 'POST' in sys.argv:\n assert sys.argv[-1].endswith('/rerun')\nelse:\n print(json.dumps([{'id':101,'name':'deck','full_name':'demo/deck','html_url':'https://github.com/demo/deck','updated_at':'2026-10-28','private':False}]))",
+        );
+        let mut api = Api::new_for(
+            "github.com",
+            false,
+            Language::En,
+            crate::provider::Provider::Github,
+        )
+        .unwrap();
+        api.program = fake.path.clone();
+        let Response::Json(rows) = api
+            .execute(
+                &Request::get("user/repos?per_page=50&page=1"),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(rows[0]["path_with_namespace"], "demo/deck");
+        assert_eq!(rows[0]["visibility"], "public");
+        let response = api
+            .execute(
+                &Request::Json {
+                    endpoint: "repos/demo/deck".into(),
+                    method: Method::Patch,
+                    body: Some(json!({"description":"Моё описание"})),
+                },
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert!(matches!(response, Response::Json(Value::Null)));
+        assert!(matches!(
+            api.execute(
+                &Request::post("repos/demo/deck/actions/runs/7/rerun"),
+                &AtomicBool::new(false)
+            )
+            .unwrap(),
+            Response::Json(Value::Null)
+        ));
+    }
+
+    #[test]
+    fn github_viewer_favorites_and_incomplete_search_contracts() {
+        let fake = FakeCli::new(
+            "import json,sys\nep=sys.argv[-1]\nif ep=='user': print(json.dumps({'login':'igor'}))\nelif ep.startswith('search/issues'):\n assert 'involves%3Aigor' in ep\n print(json.dumps({'items':[{'number':42,'repository_url':'https://api.github.com/repos/igor/deck','user':{'login':'igor'}}]}))\nelif ep=='repositories/101': print(json.dumps({'id':101,'name':'deck','full_name':'igor/deck'}))\nelse:\n print('HTTP 404 SECRET',file=sys.stderr)\n sys.exit(1)",
+        );
+        let mut api = Api::new_for(
+            "github.com",
+            false,
+            Language::En,
+            crate::provider::Provider::Github,
+        )
+        .unwrap();
+        api.program = fake.path.clone();
+        let Response::Json(rows) = api
+            .execute(
+                &Request::get(
+                    "search/issues?per_page=50&page=1&q=is%3Apr%20is%3Aopen%20involves%3A%40me",
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(rows[0]["_project"]["full_name"], "igor/deck");
+        let Response::Json(rows) = api
+            .execute(&Request::Projects(vec![101, 102]), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(rows[0]["path_with_namespace"], "igor/deck");
+        assert_eq!(rows[1]["_unavailable"], true);
+        assert!(!rows.to_string().contains("SECRET"));
+        let missing = api
+            .execute(&Request::get("repos/a/b"), &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(missing.message.contains("GitHub"));
+        assert!(!missing.message.contains("GitLab"));
+        assert!(!missing.message.contains("SECRET"));
+        let rate_limited = FakeCli::new(
+            "import sys\nprint('API rate limit exceeded (HTTP 403) SECRET',file=sys.stderr)\nsys.exit(1)",
+        );
+        api.program = rate_limited.path.clone();
+        let error = api
+            .execute(
+                &Request::post("repos/a/b/actions/runs/7/rerun"),
+                &AtomicBool::new(false),
+            )
+            .unwrap_err();
+        assert!(error.message.contains("429"));
+        assert!(!error.message.contains("SECRET"));
+        assert!(!error.uncertain);
+        let incomplete = FakeCli::new("print('{\"items\":[],\"incomplete_results\":true}')");
+        api.program = incomplete.path.clone();
+        assert!(
+            api.execute(
+                &Request::get("search/repositories?q=deck&page=1"),
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .message
+            .contains("incomplete")
+        );
+        assert!(
+            api.execute(
+                &Request::get("search/repositories?q=deck&page=21"),
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .message
+            .contains("1,000")
+        );
     }
 
     #[test]

@@ -2,6 +2,8 @@ pub mod api;
 pub mod app;
 pub mod config;
 pub mod demo;
+pub(crate) mod github;
 pub mod i18n;
 pub mod model;
+pub mod provider;
 pub mod ui;

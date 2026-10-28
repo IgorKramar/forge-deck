@@ -92,6 +92,7 @@ pub enum Method {
     Get,
     Post,
     Put,
+    Patch,
 }
 
 impl Method {
@@ -100,6 +101,7 @@ impl Method {
             Self::Get => "GET",
             Self::Post => "POST",
             Self::Put => "PUT",
+            Self::Patch => "PATCH",
         }
     }
 }
@@ -148,7 +150,7 @@ impl Request {
         matches!(
             self,
             Self::Json {
-                method: Method::Post | Method::Put,
+                method: Method::Post | Method::Put | Method::Patch,
                 ..
             }
         )
