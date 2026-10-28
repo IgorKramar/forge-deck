@@ -220,11 +220,35 @@ impl GitHubDemo {
             json!({"id":9271,"name":"unit-tests","status":"completed","conclusion":"success","run_id":1842}),
             json!({"id":9272,"name":"release","status":"in_progress","conclusion":null,"run_id":1843}),
         ];
+        let per_repository = |records: Vec<Value>, is_job: bool| {
+            ["api-gateway", "web-console", "design-system"]
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, name)| {
+                    records.iter().cloned().map(move |mut record| {
+                        let offset = index as u64 * 10_000;
+                        record["id"] = (record["id"].as_u64().unwrap() + offset).into();
+                        if is_job {
+                            record["run_id"] = (record["run_id"].as_u64().unwrap() + offset).into();
+                        }
+                        if record.get("html_url").is_some() {
+                            record["html_url"] = format!(
+                                "https://github.com/demo/{name}/actions/runs/{}",
+                                record["id"]
+                            )
+                            .into();
+                        }
+                        record["_demo_repository"] = name.into();
+                        record
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
         Self {
             language,
             repositories,
-            runs,
-            jobs,
+            runs: per_repository(runs, false),
+            jobs: per_repository(jobs, true),
         }
     }
     pub(crate) fn set_language(&mut self, _language: Language) {
@@ -272,7 +296,20 @@ impl GitHubDemo {
                 ["search", "repositories"] => {
                     json!({"items":page(self.repositories.clone(),query)})
                 }
-                ["search", "issues"] => json!({"items":page(vec![self.pull()],query)}),
+                ["search", "issues"] => {
+                    let repository = self
+                        .repositories
+                        .iter()
+                        .find(|repo| {
+                            query.contains(&encode(&format!(
+                                "repo:{}",
+                                repo["full_name"].as_str().unwrap()
+                            )))
+                        })
+                        .and_then(|repo| repo["name"].as_str())
+                        .unwrap_or("api-gateway");
+                    json!({"items":page(vec![self.pull(repository)],query)})
+                }
                 ["repositories", id] => self
                     .repositories
                     .iter()
@@ -318,8 +355,8 @@ impl GitHubDemo {
                             ],
                             query,
                         )),
-                        ["pulls"] => Value::Array(page(vec![self.pull()], query)),
-                        ["pulls", "42"] => self.pull(),
+                        ["pulls"] => Value::Array(page(vec![self.pull(name)], query)),
+                        ["pulls", "42"] => self.pull(name),
                         ["pulls", "42", "files"] => Value::Array(page(
                             vec![
                                 json!({"filename":"src/main.rs","patch":"@@ -1,1 +1,2 @@\n fn main() {\n+    println!(\"Forge Deck\");","status":"modified"}),
@@ -334,17 +371,16 @@ impl GitHubDemo {
                         )),
                         ["pulls", "42", "comments"] => Value::Array(Vec::new()),
                         ["actions", "runs"] => {
-                            json!({"workflow_runs":page(self.runs.clone(),query)})
+                            json!({"workflow_runs":page(self.runs.iter().filter(|r|r["_demo_repository"]==*name).cloned().collect(),query)})
                         }
                         ["actions", "runs", run, "jobs"] => {
-                            json!({"jobs":page(self.jobs.iter().filter(|job|job["run_id"].as_u64()==run.parse().ok()).cloned().collect(),query)})
+                            json!({"jobs":page(self.jobs.iter().filter(|job|job["_demo_repository"]==*name && job["run_id"].as_u64()==run.parse().ok()).cloned().collect(),query)})
                         }
                         ["actions", "jobs", job, "logs"] if text => {
-                            if !self
-                                .jobs
-                                .iter()
-                                .any(|j| j["id"].as_u64() == job.parse().ok())
-                            {
+                            if !self.jobs.iter().any(|j| {
+                                j["_demo_repository"] == *name
+                                    && j["id"].as_u64() == job.parse().ok()
+                            }) {
                                 return Err(not_found());
                             }
                             return Ok(Response::Text{body:"2026-10-28T02:30:00Z Run cargo test --locked\n2026-10-28T02:30:01Z running 30 tests\n2026-10-28T02:30:02Z test result: ok. 30 passed; 0 failed\n".into(),truncated:false});
@@ -393,7 +429,10 @@ impl GitHubDemo {
                         let run = self
                             .runs
                             .iter_mut()
-                            .find(|run| run["id"].as_u64() == id.parse().ok())
+                            .find(|run| {
+                                run["_demo_repository"] == *name
+                                    && run["id"].as_u64() == id.parse().ok()
+                            })
                             .ok_or_else(not_found)?;
                         run["status"] = if *action == "cancel" {
                             "completed"
@@ -412,7 +451,10 @@ impl GitHubDemo {
                         let job = self
                             .jobs
                             .iter_mut()
-                            .find(|job| job["id"].as_u64() == id.parse().ok())
+                            .find(|job| {
+                                job["_demo_repository"] == *name
+                                    && job["id"].as_u64() == id.parse().ok()
+                            })
                             .ok_or_else(not_found)?;
                         job["status"] = "queued".into();
                         job["conclusion"] = Value::Null;
@@ -424,8 +466,8 @@ impl GitHubDemo {
         }
         Err(invalid())
     }
-    fn pull(&self) -> Value {
-        json!({"id":501,"number":42,"title":self.language.text("Refine upstream retries","Уточнить повторы запросов к upstream"),"body":self.language.text("Add a bounded retry budget and timeout checks.\n\n## Checks\n- cargo test\n- cargo clippy","Ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy"),"state":"open","draft":false,"head":{"ref":"feat/retry-budget"},"base":{"ref":"main"},"user":{"login":"demo"},"labels":[{"name":"backend"},{"name":"review"}],"html_url":"https://github.com/demo/api-gateway/pull/42","repository_url":"https://api.github.com/repos/demo/api-gateway","created_at":"2026-10-28T01:30:00Z","updated_at":"2026-10-28T02:30:00Z"})
+    fn pull(&self, repository: &str) -> Value {
+        json!({"id":501,"number":42,"title":self.language.text("Refine upstream retries","Уточнить повторы запросов к upstream"),"body":self.language.text("Add a bounded retry budget and timeout checks.\n\n## Checks\n- cargo test\n- cargo clippy","Ограниченный бюджет повторов и проверка тайм-аутов.\n\n## Проверки\n- cargo test\n- cargo clippy"),"state":"open","draft":false,"head":{"ref":"feat/retry-budget"},"base":{"ref":"main"},"user":{"login":"demo"},"labels":[{"name":"backend"},{"name":"review"}],"html_url":format!("https://github.com/demo/{repository}/pull/42"),"repository_url":format!("https://api.github.com/repos/demo/{repository}"),"created_at":"2026-10-28T01:30:00Z","updated_at":"2026-10-28T02:30:00Z"})
     }
 }
 fn page(mut values: Vec<Value>, query: &str) -> Vec<Value> {
@@ -578,6 +620,30 @@ mod tests {
             panic!()
         };
         assert_eq!(runs[0]["status"], "queued");
+        let Response::Json(other_runs) = demo
+            .execute(&Request::get("repos/demo/web-console/actions/runs"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(other_runs[0]["status"], "success");
+        assert!(
+            demo.execute(&Request::post(
+                "repos/demo/web-console/actions/runs/1842/cancel"
+            ))
+            .is_err()
+        );
+        let Response::Json(other_pr) = demo
+            .execute(&Request::get("repos/demo/web-console/pulls/42"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            other_pr["web_url"],
+            "https://github.com/demo/web-console/pull/42"
+        );
+
         assert!(
             demo.execute(&Request::post(
                 "repos/demo/api-gateway/actions/jobs/9270/cancel"
