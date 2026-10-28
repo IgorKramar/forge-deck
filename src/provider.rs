@@ -31,3 +31,36 @@ impl Provider {
         }
     }
 }
+
+impl Provider {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Gitlab => Self::Github,
+            Self::Github => Self::Gitlab,
+        }
+    }
+    pub fn demo_host(self) -> &'static str {
+        match self {
+            Self::Gitlab => "gitlab.example.org",
+            Self::Github => "github.example.org",
+        }
+    }
+    pub fn title(self, view: crate::model::View, language: crate::i18n::Language) -> &'static str {
+        use crate::model::View;
+        if self == Self::Github {
+            match view {
+                View::Projects => return language.text("Repositories", "Репозитории"),
+                View::Groups => return language.text("Organizations", "Организации"),
+                View::MergeRequests => return "Pull requests",
+                View::MrDetails => return "Pull request",
+                View::MrNotes => return language.text("Comments", "Комментарии"),
+                View::Pipelines => return "Actions",
+                _ => (),
+            }
+        }
+        view.title_in(language)
+    }
+    pub fn mr_prefix(self) -> &'static str {
+        if self == Self::Github { "#" } else { "!" }
+    }
+}

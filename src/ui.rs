@@ -1,5 +1,5 @@
-use crate::i18n::Language;
-use crate::model::{Focus, Popup, SETTINGS, SettingKind, State, View, number, string, value_label};
+use crate::model::{Focus, Popup, SettingKind, State, View, number, string, value_label};
+use crate::{i18n::Language, provider::Provider};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -46,7 +46,7 @@ pub fn draw(frame: &mut Frame, state: &State) {
     frame.render_widget(Block::default().style(fg(TEXT).bg(BG)), area);
     if area.width < 80 || area.height < 24 {
         let text = Text::from(vec![
-            Line::styled("GitLab Deck", bold(BLUE)),
+            Line::styled("Forge Deck", bold(BLUE)),
             Line::from(""),
             Line::from(language.text(
                 "Resize the terminal to at least 80 × 24.",
@@ -91,7 +91,7 @@ pub fn draw(frame: &mut Frame, state: &State) {
     footer(frame, rows[3], state);
     status_line(frame, rows[4], state);
     if let Some(popup) = &state.popup {
-        popup_draw(frame, area, popup, state.popup_scroll, language);
+        popup_draw(frame, area, popup, state.popup_scroll, state);
     }
 }
 
@@ -104,7 +104,7 @@ fn header(frame: &mut Frame, area: Rect, state: &State) {
     ])
     .split(area);
     frame.render_widget(
-        Paragraph::new(Line::styled(" GitLab Deck", bold(BLUE))),
+        Paragraph::new(Line::styled(" Forge Deck", bold(BLUE))),
         parts[0],
     );
     let context = state
@@ -125,9 +125,16 @@ fn header(frame: &mut Frame, area: Rect, state: &State) {
             fg(CYAN),
         )
     } else if state.demo {
-        Span::styled(language.text(" DEMO ", " ДЕМО "), bold(GREEN))
+        Span::styled(
+            format!(
+                "{} {} ",
+                state.provider.name(),
+                language.text("DEMO", "ДЕМО")
+            ),
+            bold(GREEN),
+        )
     } else {
-        Span::styled(" GitLab ", fg(PURPLE))
+        Span::styled(format!(" {} ", state.provider.name()), fg(PURPLE))
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -155,7 +162,11 @@ fn tabs(frame: &mut Frame, area: Rect, state: &State) {
         ),
         (
             "m",
-            "MR",
+            if state.provider == Provider::Github {
+                "PR"
+            } else {
+                "MR"
+            },
             matches!(
                 current,
                 View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes
@@ -163,7 +174,11 @@ fn tabs(frame: &mut Frame, area: Rect, state: &State) {
         ),
         (
             "p",
-            "CI / CD",
+            if state.provider == Provider::Github {
+                "Actions"
+            } else {
+                "CI / CD"
+            },
             matches!(current, View::Pipelines | View::Jobs | View::Trace),
         ),
         (
@@ -221,9 +236,21 @@ fn sidebar(frame: &mut Frame, area: Rect, state: &State) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let labels = [
-        language.text("  Projects", "  Проекты"),
-        language.text("  Groups", "  Группы"),
-        language.text("  All MRs", "  Все MR"),
+        if state.provider == Provider::Github {
+            language.text("  Repositories", "  Репозитории")
+        } else {
+            language.text("  Projects", "  Проекты")
+        },
+        if state.provider == Provider::Github {
+            language.text("  Organizations", "  Организации")
+        } else {
+            language.text("  Groups", "  Группы")
+        },
+        if state.provider == Provider::Github {
+            language.text("  My PRs", "  Мои PR")
+        } else {
+            language.text("  All MRs", "  Все MR")
+        },
         language.text("  Favorites", "  Избранное"),
         language.text("󰒓  Server", "󰒓  Сервер"),
     ];
@@ -278,7 +305,7 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
     let language = state.language;
     let title = format!(
         " {}  {} ",
-        state.context.view.title_in(language),
+        state.title(state.context.view),
         state.rows.len()
     );
     let block = panel(title, state.focus == Focus::Main);
@@ -304,7 +331,7 @@ fn list_view(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
     let compact = inner.width < 75;
-    let (headers, widths) = table_columns(state.context.view, compact, language);
+    let (headers, widths) = table_columns(state.context.view, compact, language, state.provider);
     let table_rows = state.rows.iter().map(|row| {
         let cells = table_cells(row, state.context.view, compact, state);
         Row::new(cells).height(2).bottom_margin(1)
@@ -350,32 +377,57 @@ fn table_columns(
     view: View,
     compact: bool,
     language: Language,
+    provider: Provider,
 ) -> (Vec<&'static str>, Vec<Constraint>) {
     let (a, b, c) = match view {
         View::Projects | View::Favorites => (
-            language.text("PROJECT", "ПРОЕКТ"),
+            if provider == Provider::Github {
+                language.text("REPOSITORY", "РЕПОЗИТОРИЙ")
+            } else {
+                language.text("PROJECT", "ПРОЕКТ")
+            },
             language.text("VISIBILITY", "ДОСТУП"),
             language.text("UPDATED", "ОБНОВЛЁН"),
         ),
         View::Groups => (
-            language.text("GROUP", "ГРУППА"),
+            if provider == Provider::Github {
+                language.text("ORGANIZATION", "ОРГАНИЗАЦИЯ")
+            } else {
+                language.text("GROUP", "ГРУППА")
+            },
             language.text("VISIBILITY", "ДОСТУП"),
             "ID",
         ),
         View::MergeRequests => (
-            "MERGE REQUEST",
+            if provider == Provider::Github {
+                "PULL REQUEST"
+            } else {
+                "MERGE REQUEST"
+            },
             language.text("STATUS", "СТАТУС"),
             language.text("AUTHOR", "АВТОР"),
         ),
         View::Pipelines => (
-            language.text("PIPELINE / BRANCH", "ПАЙПЛАЙН / ВЕТКА"),
+            if provider == Provider::Github {
+                language.text("WORKFLOW / BRANCH", "WORKFLOW / ВЕТКА")
+            } else {
+                language.text("PIPELINE / BRANCH", "ПАЙПЛАЙН / ВЕТКА")
+            },
             language.text("STATUS", "СТАТУС"),
-            language.text("DURATION", "ВРЕМЯ"),
+            if provider == Provider::Github {
+                language.text("STARTED", "ЗАПУЩЕН")
+            } else {
+                language.text("DURATION", "ВРЕМЯ")
+            },
         ),
         View::Jobs => (
             language.text("JOB / STAGE", "ДЖОБА / ЭТАП"),
             language.text("STATUS", "СТАТУС"),
-            language.text("DURATION", "ВРЕМЯ"),
+            if provider == Provider::Github {
+                language.text("STARTED", "ЗАПУЩЕН")
+            } else {
+                language.text("DURATION", "ВРЕМЯ")
+            },
         ),
         View::Repository => (
             language.text("NAME", "ИМЯ"),
@@ -433,7 +485,12 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
             number(row, "id").to_string(),
         ),
         View::MergeRequests => (
-            format!("!{}  {}", number(row, "iid"), string(row, "title")),
+            format!(
+                "{}{}  {}",
+                state.provider.mr_prefix(),
+                number(row, "iid"),
+                string(row, "title")
+            ),
             format!(
                 "{} → {}",
                 string(row, "source_branch"),
@@ -453,13 +510,35 @@ fn table_cells<'a>(row: &'a Value, view: View, compact: bool, state: &State) -> 
             format!("#{}  {}", number(row, "id"), string(row, "ref")),
             short(string(row, "sha"), 8),
             string(row, "status").into(),
-            duration(row.get("duration"), language),
+            if state.provider == Provider::Github {
+                date(string(
+                    row,
+                    if view == View::Jobs {
+                        "started_at"
+                    } else {
+                        "created_at"
+                    },
+                ))
+            } else {
+                duration(row.get("duration"), language)
+            },
         ),
         View::Jobs => (
             string(row, "name").into(),
             string(row, "stage").into(),
             string(row, "status").into(),
-            duration(row.get("duration"), language),
+            if state.provider == Provider::Github {
+                date(string(
+                    row,
+                    if view == View::Jobs {
+                        "started_at"
+                    } else {
+                        "created_at"
+                    },
+                ))
+            } else {
+                duration(row.get("duration"), language)
+            },
         ),
         View::Repository => (
             format!(
@@ -582,7 +661,11 @@ fn overview(frame: &mut Frame, area: Rect, state: &State) {
         state.context.project.as_ref().unwrap_or(&Value::Null)
     };
     let block = panel(
-        language.text("  Project overview ", "  Обзор проекта "),
+        if state.provider == Provider::Github {
+            language.text("  Repository overview ", "  Обзор репозитория ")
+        } else {
+            language.text("  Project overview ", "  Обзор проекта ")
+        },
         state.focus == Focus::Main,
     );
     let inner = block.inner(area);
@@ -595,7 +678,7 @@ fn overview(frame: &mut Frame, area: Rect, state: &State) {
         Line::from(""),
         Line::from(""),
     ];
-    lines.extend(project_facts(project, language));
+    lines.extend(project_facts(project, language, state.provider));
     lines.extend([
         Line::from(""),
         Line::styled(
@@ -604,8 +687,16 @@ fn overview(frame: &mut Frame, area: Rect, state: &State) {
         ),
         Line::from(""),
         Line::from(language.text(
-            "f  files       m  merge requests       p  pipelines",
-            "f  файлы       m  merge requests       p  пайплайны",
+            if state.provider == Provider::Github {
+                "f  files       m  pull requests        p  Actions"
+            } else {
+                "f  files       m  merge requests       p  pipelines"
+            },
+            if state.provider == Provider::Github {
+                "f  файлы       m  pull requests        p  Actions"
+            } else {
+                "f  файлы       m  merge requests       p  пайплайны"
+            },
         )),
         Line::from(language.text(
             "b  branches    s  settings             Esc  back",
@@ -639,14 +730,15 @@ fn text_view(frame: &mut Frame, area: Rect, state: &State) {
             .map(|v| format!(" 󰈙 {} ", string(v, "path"))),
         View::MrDetails | View::MrDiff | View::MrNotes => state.context.mr.as_ref().map(|v| {
             format!(
-                " !{} · {} ",
+                " {}{} · {} ",
+                state.provider.mr_prefix(),
                 number(v, "iid"),
-                state.context.view.title_in(language)
+                state.title(state.context.view)
             )
         }),
         _ => None,
     }
-    .unwrap_or_else(|| format!(" {} ", state.context.view.title_in(language)));
+    .unwrap_or_else(|| format!(" {} ", state.title(state.context.view)));
     let block = panel(title, state.focus == Focus::Main);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -698,17 +790,27 @@ fn text_view(frame: &mut Frame, area: Rect, state: &State) {
 fn settings(frame: &mut Frame, area: Rect, state: &State) {
     let language = state.language;
     let block = panel(
-        language.text(" 󰒓 Project settings ", " 󰒓 Настройки проекта "),
+        if state.provider == Provider::Github {
+            language.text(" 󰒓 Repository settings ", " 󰒓 Настройки репозитория ")
+        } else {
+            language.text(" 󰒓 Project settings ", " 󰒓 Настройки проекта ")
+        },
         state.focus == Focus::Main,
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let visible = usize::from(inner.height / 4).max(1);
-    let selected = state.selected.min(SETTINGS.len() - 1);
+    let selected = state.selected.min(state.settings().len() - 1);
     let start = selected
         .saturating_sub(visible / 2)
-        .min(SETTINGS.len().saturating_sub(visible));
-    for (position, setting) in SETTINGS.iter().enumerate().skip(start).take(visible) {
+        .min(state.settings().len().saturating_sub(visible));
+    for (position, setting) in state
+        .settings()
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+    {
         let y = inner.y + ((position - start) * 4) as u16;
         let field_area = Rect::new(
             inner.x,
@@ -769,7 +871,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let lines = if state.context.view == View::Settings {
-        let setting = &SETTINGS[state.selected.min(SETTINGS.len() - 1)];
+        let setting = &state.settings()[state.selected.min(state.settings().len() - 1)];
         let mut lines = vec![
             Line::styled(setting.label_in(language), bold(BLUE)),
             Line::from(""),
@@ -807,7 +909,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
         _ => state.selected().or(state.context.project.as_ref()),
     } {
         match state.context.view {
-            View::Projects | View::Favorites => project_preview(row, language),
+            View::Projects | View::Favorites => project_preview(row, language, state.provider),
             View::Groups => vec![
                 Line::styled(string(row, "name").to_owned(), bold(BLUE)),
                 Line::from(""),
@@ -822,7 +924,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
             ],
             View::Pipelines | View::Jobs | View::Trace => ci_preview(row, state),
             View::MergeRequests | View::MrDetails | View::MrDiff | View::MrNotes => {
-                mr_preview(row, language)
+                mr_preview(row, language, state.provider)
             }
             View::Repository | View::File => vec![
                 Line::styled(string(row, "name").to_owned(), bold(BLUE)),
@@ -832,7 +934,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
                 Line::styled(language.text("Enter — open", "Enter — открыть"), fg(MUTED)),
             ],
             _ => vec![
-                Line::styled(state.context.view.title_in(language), fg(MUTED)),
+                Line::styled(state.title(state.context.view), fg(MUTED)),
                 Line::from(""),
                 Line::from(string(row, "name").to_owned()),
             ],
@@ -856,7 +958,7 @@ fn details(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn project_preview(project: &Value, language: Language) -> Vec<Line<'static>> {
+fn project_preview(project: &Value, language: Language, provider: Provider) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::styled(string(project, "name").to_owned(), bold(BLUE)),
         Line::styled(string(project, "path_with_namespace").to_owned(), fg(MUTED)),
@@ -877,7 +979,7 @@ fn project_preview(project: &Value, language: Language) -> Vec<Line<'static>> {
             Line::from(""),
         ]);
     }
-    lines.extend(project_facts(project, language));
+    lines.extend(project_facts(project, language, provider));
     lines.extend([
         Line::from(""),
         Line::styled(
@@ -888,7 +990,7 @@ fn project_preview(project: &Value, language: Language) -> Vec<Line<'static>> {
     lines
 }
 
-fn project_facts(project: &Value, language: Language) -> Vec<Line<'static>> {
+fn project_facts(project: &Value, language: Language, provider: Provider) -> Vec<Line<'static>> {
     let role = ["project_access", "group_access"]
         .iter()
         .filter_map(|key| {
@@ -899,13 +1001,25 @@ fn project_facts(project: &Value, language: Language) -> Vec<Line<'static>> {
                 .as_u64()
         })
         .max();
-    let role = match role {
-        Some(50..) => "Owner",
-        Some(40..) => "Maintainer",
-        Some(30..) => "Developer",
-        Some(20..) => "Reporter",
-        Some(_) => "Guest",
-        None => "—",
+    let role = if provider == Provider::Github {
+        if project.pointer("/permissions/admin") == Some(&Value::Bool(true)) {
+            "Admin"
+        } else if project.pointer("/permissions/push") == Some(&Value::Bool(true)) {
+            "Write"
+        } else if project.pointer("/permissions/pull") == Some(&Value::Bool(true)) {
+            "Read"
+        } else {
+            "—"
+        }
+    } else {
+        match role {
+            Some(50..) => "Owner",
+            Some(40..) => "Maintainer",
+            Some(30..) => "Developer",
+            Some(20..) => "Reporter",
+            Some(_) => "Guest",
+            None => "—",
+        }
     };
     vec![
         fact(
@@ -947,7 +1061,11 @@ fn ci_preview(item: &Value, state: &State) -> Vec<Line<'static>> {
     if let Some(pipeline) = &state.context.pipeline {
         lines.extend([
             fact(
-                language.text("Pipeline", "Пайплайн"),
+                if state.provider == Provider::Github {
+                    "Workflow"
+                } else {
+                    language.text("Pipeline", "Пайплайн")
+                },
                 &format!("#{}", number(pipeline, "id")),
             ),
             Line::from(""),
@@ -955,9 +1073,22 @@ fn ci_preview(item: &Value, state: &State) -> Vec<Line<'static>> {
     }
     lines.extend([
         Line::styled(language.text("r — retry", "r — повторить"), fg(MUTED)),
-        Line::styled(language.text("x — cancel", "x — отменить"), fg(MUTED)),
         Line::styled(
-            language.text("S — play manual job", "S — ручной запуск"),
+            if state.provider == Provider::Github
+                && matches!(state.context.view, View::Jobs | View::Trace)
+            {
+                language.text("Cancel from the workflow run", "Отмена в списке запусков")
+            } else {
+                language.text("x — cancel", "x — отменить")
+            },
+            fg(MUTED),
+        ),
+        Line::styled(
+            if state.provider == Provider::Github {
+                ""
+            } else {
+                language.text("S — play manual job", "S — ручной запуск")
+            },
             fg(MUTED),
         ),
         Line::from(""),
@@ -972,9 +1103,12 @@ fn ci_preview(item: &Value, state: &State) -> Vec<Line<'static>> {
     lines
 }
 
-fn mr_preview(item: &Value, language: Language) -> Vec<Line<'static>> {
+fn mr_preview(item: &Value, language: Language, provider: Provider) -> Vec<Line<'static>> {
     vec![
-        Line::styled(format!("!{}", number(item, "iid")), bold(BLUE)),
+        Line::styled(
+            format!("{}{}", provider.mr_prefix(), number(item, "iid")),
+            bold(BLUE),
+        ),
         Line::from(""),
         Line::from(string(item, "title").to_owned()),
         Line::from(""),
@@ -1015,6 +1149,10 @@ fn footer(frame: &mut Frame, area: Rect, state: &State) {
             "Enter jobs   r retry   x cancel   n/N pages",
             "Enter джобы   r повторить   x отменить   n/N страницы",
         ),
+        View::Jobs if state.provider == Provider::Github => language.text(
+            "Enter log   r rerun job + dependents   n/N pages",
+            "Enter лог   r повторить с зависимыми   n/N страницы",
+        ),
         View::Jobs => language.text(
             "Enter log   r retry   x cancel   S play",
             "Enter лог   r повторить   x отменить   S запуск",
@@ -1044,7 +1182,7 @@ fn footer(frame: &mut Frame, area: Rect, state: &State) {
         Paragraph::new(vec![
             Line::styled(contextual, fg(BLUE)),
             Line::styled(
-                language.text("Tab focus   1 projects  2 groups  3 MRs   H server   L en/ru   ? help   q quit", "Tab фокус   1 проекты  2 группы  3 MR   H сервер   L en/ru   ? помощь   q выход"),
+                language.text("Tab focus   1/2/3 browse   G forge   H host   L en/ru   ? help   q quit", "Tab фокус   1/2/3 обзор   G платформа   H сервер   L en/ru   ? помощь   q выход"),
                 fg(MUTED),
             ),
         ]),
@@ -1064,7 +1202,7 @@ fn status_line(frame: &mut Frame, area: Rect, state: &State) {
                 language,
                 "{}  ·  {} entries  ·  {}",
                 "{}  ·  {} записей  ·  {}",
-                state.context.view.title_in(language),
+                state.title(state.context.view),
                 state.rows.len(),
                 if state.demo {
                     language.text("demo data", "демонстрационные данные")
@@ -1078,7 +1216,8 @@ fn status_line(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, language: Language) {
+fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, state: &State) {
+    let language = state.language;
     let (width, height) = match popup {
         Popup::Help => (90, 23),
         Popup::Input { .. } => (85, 10),
@@ -1113,12 +1252,28 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, languag
                     "Tab              фокус: меню → содержимое → детали",
                 ),
                 language.text(
-                    "1 / 2 / 3        projects / groups / all MRs",
-                    "1 / 2 / 3        проекты / группы / все MR",
+                    if state.provider == Provider::Github {
+                        "1 / 2 / 3        repositories / organizations / my PRs"
+                    } else {
+                        "1 / 2 / 3        projects / groups / all MRs"
+                    },
+                    if state.provider == Provider::Github {
+                        "1 / 2 / 3        репозитории / организации / мои PR"
+                    } else {
+                        "1 / 2 / 3        проекты / группы / все MR"
+                    },
                 ),
                 language.text(
-                    "o / f / m        overview / files / project MRs",
-                    "o / f / m        обзор / файлы / MR текущего проекта",
+                    if state.provider == Provider::Github {
+                        "o / f / m        overview / files / repository PRs"
+                    } else {
+                        "o / f / m        overview / files / project MRs"
+                    },
+                    if state.provider == Provider::Github {
+                        "o / f / m        обзор / файлы / PR репозитория"
+                    } else {
+                        "o / f / m        обзор / файлы / MR текущего проекта"
+                    },
                 ),
                 language.text(
                     "p / b / s        CI / branches / project settings",
@@ -1141,12 +1296,28 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, languag
                     "n / N, [ / ]     страницы; в тексте n/N — поиск далее/назад",
                 ),
                 language.text(
-                    "d / c            merge request diff / discussions",
-                    "d / c            дифф / обсуждения merge request",
+                    if state.provider == Provider::Github {
+                        "d / c            pull request diff / general comments"
+                    } else {
+                        "d / c            merge request diff / discussions"
+                    },
+                    if state.provider == Provider::Github {
+                        "d / c            дифф / общие комментарии pull request"
+                    } else {
+                        "d / c            дифф / обсуждения merge request"
+                    },
                 ),
                 language.text(
-                    "r / x / S        retry / cancel CI / play a manual job",
-                    "r / x / S        повтор / отмена CI / запуск ручной джобы",
+                    if state.provider == Provider::Github {
+                        "r / x            rerun / cancel workflow run (x runs only)"
+                    } else {
+                        "r / x / S        retry / cancel CI / play a manual job"
+                    },
+                    if state.provider == Provider::Github {
+                        "r / x            повтор / отмена workflow (x только запуск)"
+                    } else {
+                        "r / x / S        повтор / отмена CI / запуск ручной джобы"
+                    },
                 ),
                 language.text(
                     "F5 / R           refresh the current screen",
@@ -1161,8 +1332,8 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, languag
                     "e                редактировать выбранную настройку",
                 ),
                 language.text(
-                    "H                connect to another server",
-                    "H                подключиться к другому серверу",
+                    "G / H            switch forge / connect to another server",
+                    "G / H            сменить платформу / подключиться к серверу",
                 ),
                 language.text(
                     "L                switch English / Russian",
@@ -1207,7 +1378,7 @@ fn popup_draw(frame: &mut Frame, area: Rect, popup: &Popup, scroll: u16, languag
                 sections[1],
             );
             let hint = match purpose {
-                crate::model::InputPurpose::Setting(index) => match SETTINGS[*index].kind {
+                crate::model::InputPurpose::Setting(index) => match state.settings()[*index].kind {
                     SettingKind::Choice(_) | SettingKind::Bool => language.text(
                         "← / → select   Enter continue   Esc cancel",
                         "← / → выбрать   Enter продолжить   Esc отменить",
@@ -1308,6 +1479,7 @@ fn status_color(status: &str) -> Color {
 mod tests {
     use super::*;
     use crate::model::Request;
+    use crate::model::SETTINGS;
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
 
@@ -1332,6 +1504,27 @@ mod tests {
         state
     }
 
+    #[test]
+    fn github_labels_use_native_terms_and_available_actions() {
+        let mut state = state();
+        state.provider = Provider::Github;
+        state.host = "github.example.org".into();
+        for language in [Language::En, Language::Ru] {
+            state.language = language;
+            let text = render(&state, 160, 48);
+            assert!(text.contains(language.text("Repositories", "Репозитории")));
+            assert!(text.contains(language.text("Organizations", "Организации")));
+            assert!(text.contains(language.text("My PRs", "Мои PR")));
+            state.context.view = View::Jobs;
+            let text = render(&state, 160, 48);
+            assert!(!text.contains("S play") && !text.contains("S запуск"));
+            state.popup = Some(Popup::Help);
+            let text = render(&state, 160, 48);
+            assert!(text.contains(language.text("switch forge", "сменить платформу")));
+            state.popup = None;
+            state.context.view = View::Projects;
+        }
+    }
     #[test]
     fn english_labels_are_selected_without_translating_content() {
         let mut state = state();
@@ -1370,42 +1563,46 @@ mod tests {
                 "{text}"
             );
         };
-        for view in [
-            View::Projects,
-            View::Groups,
-            View::Favorites,
-            View::Overview,
-            View::Repository,
-            View::File,
-            View::MergeRequests,
-            View::MrDetails,
-            View::MrDiff,
-            View::MrNotes,
-            View::Pipelines,
-            View::Jobs,
-            View::Trace,
-            View::Settings,
-            View::Branches,
-        ] {
-            state.context.view = view;
-            for (width, height) in [(160, 48), (100, 32), (80, 24), (72, 22)] {
-                assert_english(render(&state, width, height));
+        for provider in [Provider::Gitlab, Provider::Github] {
+            state.provider = provider;
+            for view in [
+                View::Projects,
+                View::Groups,
+                View::Favorites,
+                View::Overview,
+                View::Repository,
+                View::File,
+                View::MergeRequests,
+                View::MrDetails,
+                View::MrDiff,
+                View::MrNotes,
+                View::Pipelines,
+                View::Jobs,
+                View::Trace,
+                View::Settings,
+                View::Branches,
+            ] {
+                state.context.view = view;
+                for (width, height) in [(160, 48), (100, 32), (80, 24), (72, 22)] {
+                    assert_english(render(&state, width, height));
+                }
+            }
+            state.context.view = View::Settings;
+            for (index, setting) in state.settings().iter().enumerate() {
+                state.selected = index;
+                state.object[setting.key] = match setting.kind {
+                    SettingKind::Text { .. } => json!("Plain text"),
+                    SettingKind::Choice(values) => json!(values[0]),
+                    SettingKind::Bool => json!(true),
+                    SettingKind::Number { min } => json!(min),
+                };
+                state.focus = Focus::Details;
+                assert_english(render(&state, 160, 48));
+                state.focus = Focus::Main;
+                assert_english(render(&state, 100, 32));
             }
         }
-        state.context.view = View::Settings;
-        for (index, setting) in SETTINGS.iter().enumerate() {
-            state.selected = index;
-            state.object[setting.key] = match setting.kind {
-                SettingKind::Text { .. } => json!("Plain text"),
-                SettingKind::Choice(values) => json!(values[0]),
-                SettingKind::Bool => json!(true),
-                SettingKind::Number { min } => json!(min),
-            };
-            state.focus = Focus::Details;
-            assert_english(render(&state, 160, 48));
-            state.focus = Focus::Main;
-            assert_english(render(&state, 100, 32));
-        }
+        state.provider = Provider::Gitlab;
         for popup in [
             Popup::Help,
             Popup::Input {
@@ -1447,7 +1644,7 @@ mod tests {
         for (width, height) in [(160, 48), (100, 32)] {
             let text = render(&state, width, height);
             assert!(text.contains("api-gateway"));
-            assert!(text.contains("GitLab Deck"));
+            assert!(text.contains("Forge Deck"));
             assert!(text.contains("Проекты"));
         }
         state.focus = Focus::Sidebar;

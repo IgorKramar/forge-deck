@@ -63,6 +63,24 @@ macro_rules! tr {
 
 impl Language {
     pub fn error_message(self, message: &str) -> String {
+        let github =
+            message.contains("GitHub") || message.starts_with("gh ") || message.contains(" gh");
+        let normalized = message.replace("GitHub", "GitLab").replace(" gh", " glab");
+        let normalized = if let Some(rest) = normalized.strip_prefix("gh ") {
+            format!("glab {rest}")
+        } else {
+            normalized
+        };
+        let translated = self.known_error(&normalized);
+        if github && translated != normalized {
+            translated.replace("GitLab", "GitHub").replace("glab", "gh")
+        } else if github {
+            message.to_owned()
+        } else {
+            translated
+        }
+    }
+    fn known_error(self, message: &str) -> String {
         match message {
             "Запрос отменён" | "Request canceled" => self.text("Request canceled", "Запрос отменён").into(),
             "Запрос отменён до отправки" | "Request canceled before sending" => self.text("Request canceled before sending", "Запрос отменён до отправки").into(),
@@ -101,6 +119,10 @@ impl Language {
             "Некорректная страница" | "Invalid page" => self.text("Invalid page", "Некорректная страница").into(),
             "Некорректный размер страницы" | "Invalid page size" => self.text("Invalid page size", "Некорректный размер страницы").into(),
             "Некорректная пагинация" | "Invalid pagination" => self.text("Invalid pagination", "Некорректная пагинация").into(),
+            "GitLab returned incomplete search results. Narrow the search and retry." | "GitLab вернул неполные результаты поиска. Уточните запрос и повторите." => self.text("GitLab returned incomplete search results. Narrow the search and retry.","GitLab вернул неполные результаты поиска. Уточните запрос и повторите.").into(),
+            "GitLab search is limited to the first 1,000 results. Narrow the search." | "Поиск GitLab ограничен первыми 1000 результатами. Уточните запрос." => self.text("GitLab search is limited to the first 1,000 results. Narrow the search.","Поиск GitLab ограничен первыми 1000 результатами. Уточните запрос.").into(),
+            "GitLab resource unavailable (404)" | "Ресурс GitLab недоступен (404)" => self.text("GitLab resource unavailable (404)","Ресурс GitLab недоступен (404)").into(),
+            "Unsupported GitLab demo request or value" | "Неподдерживаемый запрос или значение деморежима GitLab" => self.text("Unsupported GitLab demo request or value","Неподдерживаемый запрос или значение деморежима GitLab").into(),
             _ => message.to_owned(),
         }
     }

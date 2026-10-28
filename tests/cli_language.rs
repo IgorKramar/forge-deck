@@ -60,5 +60,27 @@ fn cli_saved_language_and_locale_have_explicit_priority() {
             .unwrap()
             .contains("--lang")
     );
+    let new_config = directory.join("forge-deck/config.json");
+    fs::create_dir_all(new_config.parent().unwrap()).unwrap();
+    fs::write(
+        &new_config,
+        r#"{"provider":"github","language":"en","hosts":{"github":"github.example.org"}}"#,
+    )
+    .unwrap();
+    let output = run(&check, "");
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("3 projects")
+    );
+    let output = run(&["--demo", "--check", "--provider", "gitlab"], "");
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("7 projects")
+    );
+    assert_eq!(run(&["--provider", "bad"], "").status.code(), Some(2));
     fs::remove_dir_all(directory).unwrap();
 }

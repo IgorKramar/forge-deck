@@ -1,4 +1,4 @@
-use crate::model::*;
+use crate::{model::*, provider::Provider};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 use std::sync::{
@@ -13,6 +13,7 @@ pub enum Effect {
         cancel: Arc<AtomicBool>,
     },
     SavePreferences,
+    SwitchProvider,
     HostChanged,
     Exit,
 }
@@ -100,6 +101,10 @@ impl App {
     }
 
     pub fn request(&self) -> Result<Request, String> {
+        if self.state.provider == Provider::Github {
+            return self.github_request();
+        }
+
         let c = &self.state.context;
         let page = format!("per_page={PAGE_SIZE}&page={}", c.page);
         let search = encode(&c.query);
@@ -229,6 +234,169 @@ impl App {
         Ok(Request::get(list))
     }
 
+    fn github_repo(&self) -> Result<String, String> {
+        let full = self
+            .state
+            .context
+            .project
+            .as_ref()
+            .and_then(|p| p["full_name"].as_str())
+            .ok_or_else(|| {
+                self.state
+                    .language
+                    .text(
+                        "Select and open a repository",
+                        "Выберите и откройте репозиторий",
+                    )
+                    .to_owned()
+            })?;
+        let parts: Vec<_> = full.split('/').collect();
+        if parts.len() != 2
+            || parts
+                .iter()
+                .any(|p| p.is_empty() || matches!(*p, "." | ".."))
+        {
+            return Err(self
+                .state
+                .language
+                .text("Invalid repository name", "Некорректное имя репозитория")
+                .into());
+        }
+        Ok(format!("repos/{}/{}", encode(parts[0]), encode(parts[1])))
+    }
+
+    fn github_request(&self) -> Result<Request, String> {
+        let c = &self.state.context;
+        let page = format!("per_page={PAGE_SIZE}&page={}", c.page);
+        let search = encode(&c.query);
+        let repo = || self.github_repo();
+        let endpoint =
+            match c.view {
+                View::Projects if !c.query.is_empty() => {
+                    let query = if let Some(group) = &c.group {
+                        format!("org:{} {}", string(group, "full_path"), c.query)
+                    } else {
+                        c.query.clone()
+                    };
+                    format!("search/repositories?{page}&q={}", encode(&query))
+                }
+                View::Projects => {
+                    if let Some(group) = &c.group {
+                        format!(
+                            "orgs/{}/repos?{page}&sort=updated&direction=desc",
+                            encode(string(group, "full_path"))
+                        )
+                    } else {
+                        format!("user/repos?{page}&sort=updated&direction=desc")
+                    }
+                }
+                View::Groups => format!("user/orgs?{page}"),
+                View::Favorites => {
+                    return Ok(Request::Projects(
+                        self.state.favorites.iter().copied().collect(),
+                    ));
+                }
+                View::Overview | View::Settings => repo()?,
+                View::Repository => {
+                    let branch = c
+                        .project
+                        .as_ref()
+                        .and_then(|p| p["default_branch"].as_str())
+                        .unwrap_or("HEAD");
+                    let path = c.path.split('/').map(encode).collect::<Vec<_>>().join("/");
+                    format!("{}/contents/{path}?{page}&ref={}", repo()?, encode(branch))
+                }
+                View::File => {
+                    return Ok(Request::text(format!(
+                        "{}/git/blobs/{}",
+                        repo()?,
+                        encode(c.file.as_ref().and_then(|f| f["id"].as_str()).ok_or_else(
+                            || {
+                                self.state
+                                    .language
+                                    .text("No file selected", "Файл не выбран")
+                                    .to_owned()
+                            }
+                        )?)
+                    )));
+                }
+                View::Branches => format!("{}/branches?{page}", repo()?),
+                View::MergeRequests if c.project.is_some() && c.query.is_empty() => format!(
+                    "{}/pulls?{page}&state=open&sort=updated&direction=desc",
+                    repo()?
+                ),
+                View::MergeRequests => {
+                    let scope = c
+                        .project
+                        .as_ref()
+                        .and_then(|p| p["full_name"].as_str())
+                        .map(|name| format!("repo:{name}"))
+                        .unwrap_or_else(|| "involves:@me".into());
+                    format!(
+                        "search/issues?{page}&sort=updated&order=desc&q={}",
+                        encode(&format!("is:pr is:open {scope} {}", c.query))
+                    )
+                }
+                View::MrDetails | View::MrDiff | View::MrNotes => {
+                    let iid = c.mr.as_ref().map(|v| number(v, "iid")).ok_or_else(|| {
+                        self.state
+                            .language
+                            .text("No pull request selected", "PR не выбран")
+                            .to_owned()
+                    })?;
+                    match c.view {
+                        View::MrDiff => format!("{}/pulls/{iid}/files?{page}", repo()?),
+                        View::MrNotes => format!("{}/issues/{iid}/comments?{page}", repo()?),
+                        _ => format!("{}/pulls/{iid}", repo()?),
+                    }
+                }
+                View::Pipelines => format!(
+                    "{}/actions/runs?{page}{}",
+                    repo()?,
+                    if c.query.is_empty() {
+                        String::new()
+                    } else {
+                        format!("&branch={search}")
+                    }
+                ),
+                View::Jobs => format!(
+                    "{}/actions/runs/{}/jobs?{page}&filter=latest",
+                    repo()?,
+                    c.pipeline.as_ref().map(|v| number(v, "id")).unwrap_or(0)
+                ),
+                View::Trace => {
+                    return Ok(Request::text(format!(
+                        "{}/actions/jobs/{}/logs",
+                        repo()?,
+                        c.job.as_ref().map(|v| number(v, "id")).unwrap_or(0)
+                    )));
+                }
+            };
+        Ok(Request::get(endpoint))
+    }
+
+    pub fn connect(&mut self, provider: Provider, host: String) -> Vec<Effect> {
+        self.cancel();
+        self.history.clear();
+        self.unknown_change = None;
+        self.after_load = None;
+        self.state.provider = provider;
+        self.state.host = host;
+        self.state.context = Context::default();
+        self.state.rows.clear();
+        self.state.object = Value::Null;
+        self.state.text.clear();
+        self.state.selected = 0;
+        self.state.scroll = 0;
+        self.state.scroll_x = 0;
+        self.state.sidebar_selected = 0;
+        self.state.popup = None;
+        self.state.error = None;
+        let mut effects = vec![Effect::HostChanged];
+        effects.extend(self.refresh());
+        effects
+    }
+
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             context: self.state.context.clone(),
@@ -354,11 +522,8 @@ impl App {
                 title: self
                     .state
                     .language
-                    .text(
-                        "GitLab server · hostname[:port]",
-                        "Сервер GitLab · hostname[:port]",
-                    )
-                    .into(),
+                    .text("Server · hostname[:port]", "Сервер · hostname[:port]")
+                    .to_owned(),
                 value: self.state.host.clone(),
                 purpose: InputPurpose::Host,
             });
@@ -389,6 +554,18 @@ impl App {
         let Some(row) = self.state.selected().cloned() else {
             return Vec::new();
         };
+        if row["_unavailable"] == true && self.state.context.view == View::Repository {
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "Symlink or submodule: content preview is unavailable",
+                        "Символическая ссылка или подмодуль: просмотр недоступен",
+                    )
+                    .into(),
+            );
+            return Vec::new();
+        }
         if row["_unavailable"] == true {
             self.state.error = Some(
                 self.state
@@ -424,6 +601,9 @@ impl App {
                 c.view = View::Trace;
             }
             View::MergeRequests => {
+                if c.project.is_none() && self.state.provider == Provider::Github {
+                    c.project = row.get("_project").cloned();
+                }
                 if c.project.is_none() {
                     let id = number(&row, "project_id");
                     let name = row
@@ -466,7 +646,7 @@ impl App {
             self.state.scroll = self.state.scroll.saturating_add_signed(delta as i16);
         } else {
             let length = if self.state.context.view == View::Settings {
-                SETTINGS.len()
+                self.state.settings().len()
             } else {
                 self.state.rows.len()
             };
@@ -580,7 +760,7 @@ impl App {
         if self.state.loading {
             return Vec::new();
         }
-        let Some(setting) = SETTINGS.get(self.state.selected) else {
+        let Some(setting) = self.state.settings().get(self.state.selected) else {
             return Vec::new();
         };
         let level = self
@@ -596,13 +776,24 @@ impl App {
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             );
-        if level < 40 {
+        if (self.state.provider == Provider::Gitlab && level < 40)
+            || (self.state.provider == Provider::Github
+                && self.state.object.pointer("/permissions/admin") != Some(&Value::Bool(true)))
+        {
             self.state.error = Some(
                 self.state
                     .language
                     .text(
-                        "Editing requires the Maintainer or Owner role",
-                        "Для редактирования требуется роль Maintainer или Owner",
+                        if self.state.provider == Provider::Github {
+                            "Editing requires repository admin permission"
+                        } else {
+                            "Editing requires the Maintainer or Owner role"
+                        },
+                        if self.state.provider == Provider::Github {
+                            "Для редактирования требуются права администратора репозитория"
+                        } else {
+                            "Для редактирования требуется роль Maintainer или Owner"
+                        },
                     )
                     .into(),
             );
@@ -633,7 +824,7 @@ impl App {
     }
 
     fn confirm_setting(&mut self, index: usize, input: String) -> Vec<Effect> {
-        let setting = SETTINGS[index];
+        let setting = self.state.settings()[index];
         let value = match setting.parse_in(&input, self.state.language) {
             Ok(v) => v,
             Err(error) => {
@@ -682,7 +873,21 @@ impl App {
                 .text("Save setting?", "Сохранить настройку?")
                 .into(),
             body,
-            request: Request::put(format!("projects/{project}"), Value::Object(patch)),
+            request: if self.state.provider == Provider::Github {
+                match self.github_repo() {
+                    Ok(endpoint) => Request::Json {
+                        endpoint,
+                        method: Method::Patch,
+                        body: Some(Value::Object(patch)),
+                    },
+                    Err(error) => {
+                        self.state.error = Some(error);
+                        return Vec::new();
+                    }
+                }
+            } else {
+                Request::put(format!("projects/{project}"), Value::Object(patch))
+            },
         });
         self.state.popup_scroll = 0;
         Vec::new()
@@ -705,6 +910,18 @@ impl App {
         let Some(record) = record else {
             return Vec::new();
         };
+        if self.state.provider == Provider::Github && action == "play" {
+            self.state.error = Some(
+                self.state
+                    .language
+                    .text(
+                        "GitHub does not support manual job play here",
+                        "GitHub не поддерживает ручной запуск джобы здесь",
+                    )
+                    .into(),
+            );
+            return Vec::new();
+        }
         if action == "play" && (entity != "jobs" || string(record, "status") != "manual") {
             self.state.error = Some(
                 self.state
@@ -717,34 +934,67 @@ impl App {
             );
             return Vec::new();
         }
+        if self.state.provider == Provider::Github
+            && (action == "play" || (action == "cancel" && entity == "jobs"))
+        {
+            self.state.error=Some(self.state.language.text("GitHub supports canceling a workflow run, not individual jobs or manual job play", "GitHub поддерживает отмену запуска workflow, а не отдельной джобы или её ручной запуск").into());
+            return Vec::new();
+        }
         let id = number(record, "id");
         let label = match action {
             "retry" => self.state.language.text("Retry", "Повторить"),
             "cancel" => self.state.language.text("Cancel", "Отменить"),
             _ => self.state.language.text("Play", "Запустить"),
         };
-        let name = string(record, "name");
+        let name = string(record, "name").to_owned();
+        self.state.error = None;
         self.state.popup = Some(Popup::Confirm {
             title: format!(
                 "{label} {} #{id}?",
                 if entity == "jobs" {
                     self.state.language.text("job", "джобу")
                 } else {
-                    self.state.language.text("pipeline", "пайплайн")
+                    if self.state.provider == Provider::Github {
+                        self.state.language.text("workflow run", "запуск workflow")
+                    } else {
+                        self.state.language.text("pipeline", "пайплайн")
+                    }
                 }
             ),
             body: crate::tr!(
                 self.state.language,
-                "Project: {}\nResource: {name} #{id}\nAction: {label}\n\nThis action will be sent to GitLab.",
-                "Проект: {}\nОбъект: {name} #{id}\nДействие: {label}\n\nДействие будет отправлено в GitLab.",
+                "Project: {}\nResource: {name} #{id}\nAction: {label}\n\nThis action will be sent to {}.{}",
+                "Проект: {}\nОбъект: {name} #{id}\nДействие: {label}\n\nДействие будет отправлено в {}.{}",
                 self.state
                     .context
                     .project
                     .as_ref()
                     .map(|p| string(p, "path_with_namespace"))
-                    .unwrap_or("—")
+                    .unwrap_or("—"),
+                self.state.provider.name(),
+                if self.state.provider == Provider::Github && entity == "jobs" && action == "retry"
+                {
+                    self.state.language.text(
+                        " Dependent jobs will also be rerun.",
+                        " Зависимые джобы также будут повторены.",
+                    )
+                } else {
+                    ""
+                }
             ),
-            request: Request::post(format!("projects/{project}/{entity}/{id}/{action}")),
+            request: if self.state.provider == Provider::Github {
+                let path = if entity == "jobs" { "jobs" } else { "runs" };
+                let action = if action == "retry" { "rerun" } else { action };
+                match self.github_repo() {
+                    Ok(repo) => Request::post(format!("{repo}/actions/{path}/{id}/{action}")),
+                    Err(error) => {
+                        self.state.error = Some(error);
+                        return Vec::new();
+                    }
+                }
+            } else {
+                Request::post(format!("projects/{project}/{entity}/{id}/{action}"))
+            },
         });
         self.state.popup_scroll = 0;
         Vec::new()
@@ -807,7 +1057,7 @@ impl App {
                         if matches!(purpose, InputPurpose::Setting(_)) =>
                     {
                         if let InputPurpose::Setting(index) = purpose {
-                            let choices = match SETTINGS[index].kind {
+                            let choices = match self.state.settings()[index].kind {
                                 SettingKind::Choice(v) => v,
                                 SettingKind::Bool => &["false", "true"],
                                 _ => &[],
@@ -868,23 +1118,7 @@ impl App {
                                         Some(self.state.language.error_message(&error));
                                     return Vec::new();
                                 }
-                                self.cancel();
-                                self.history.clear();
-                                self.unknown_change = None;
-                                self.after_load = None;
-                                self.state.popup = None;
-                                self.state.host = value;
-                                self.state.context = Context::default();
-                                self.state.rows.clear();
-                                self.state.text.clear();
-                                self.state.object = Value::Null;
-                                self.state.selected = 0;
-                                self.state.scroll = 0;
-                                self.state.scroll_x = 0;
-                                self.state.sidebar_selected = 0;
-                                let mut effects = vec![Effect::HostChanged];
-                                effects.extend(self.refresh());
-                                return effects;
+                                return self.connect(self.state.provider, value);
                             }
                         }
                     }
@@ -929,6 +1163,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => vec![Effect::Exit],
+            KeyCode::Char('G') => vec![Effect::SwitchProvider],
             KeyCode::Char('L') => {
                 self.state.language = self.state.language.toggle();
                 self.localize_cached_text();
@@ -995,7 +1230,7 @@ impl App {
                         .saturating_sub(1)
                         .min(u16::MAX as usize) as u16;
                 } else if self.state.context.view == View::Settings {
-                    self.state.selected = SETTINGS.len() - 1;
+                    self.state.selected = self.state.settings().len() - 1;
                 } else {
                     self.state.selected = self.state.rows.len().saturating_sub(1);
                 }
@@ -1104,8 +1339,9 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        let settings = self.state.settings();
         if let Some(Popup::Input { value, purpose, .. }) = &mut self.state.popup {
-            let description = matches!(purpose, InputPurpose::Setting(index) if SETTINGS[*index].key == "description");
+            let description = matches!(purpose, InputPurpose::Setting(index) if settings[*index].key == "description");
             let room = 4096usize.saturating_sub(value.chars().count());
             value.extend(
                 text.chars()
@@ -1149,7 +1385,7 @@ impl App {
                     if self.state.context.view == View::Settings {
                         self.state.context.project = Some(value.clone());
                         self.state.object = value;
-                    } else if self.state.context.view == View::Trace {
+                    } else if self.state.context.view == View::Trace && value.is_object() {
                         self.state.context.job = Some(value);
                     }
                 }
@@ -1226,8 +1462,9 @@ impl App {
                         self.state.context.mr = Some(value.clone());
                         self.state.text = crate::tr!(
                             self.state.language,
-                            "!{}  {}\n\n{} → {}\nStatus: {}\nAuthor: {}\n\n{}\n\n{}",
-                            "!{}  {}\n\n{} → {}\nСтатус: {}\nАвтор: {}\n\n{}\n\n{}",
+                            "{}{}  {}\n\n{} → {}\nStatus: {}\nAuthor: {}\n\n{}\n\n{}",
+                            "{}{}  {}\n\n{} → {}\nСтатус: {}\nАвтор: {}\n\n{}\n\n{}",
+                            self.state.provider.mr_prefix(),
                             number(&value, "iid"),
                             string(&value, "title"),
                             string(&value, "source_branch"),
@@ -1255,8 +1492,24 @@ impl App {
                             .into());
                     };
                     self.can_next = items.len() == PAGE_SIZE;
+                    if self.state.provider == Provider::Github
+                        && self.state.context.page >= 20
+                        && (matches!(view, View::Repository)
+                            || matches!(view, View::MergeRequests)
+                                && (self.state.context.project.is_none()
+                                    || !self.state.context.query.is_empty())
+                            || view == View::Projects && !self.state.context.query.is_empty())
+                    {
+                        self.can_next = false;
+                        self.notice(self.state.language.text(
+                            "GitHub limits this list to 1,000 results; narrow the search",
+                            "GitHub ограничивает этот список 1000 результатами; уточните поиск",
+                        ));
+                    }
                     self.state.rows = items.clone();
-                    if matches!(view, View::Jobs | View::Repository | View::Favorites)
+                    if (matches!(view, View::Jobs | View::Repository | View::Favorites)
+                        || self.state.provider == Provider::Github
+                            && matches!(view, View::Branches | View::Groups))
                         && !self.state.context.query.is_empty()
                     {
                         let query = self.state.context.query.to_lowercase();
@@ -1282,8 +1535,8 @@ impl App {
                                             == Some(true)
                                     {
                                         self.state.language.text(
-                                            "[GitLab limited the diff for this file]\n",
-                                            "[GitLab ограничил дифф этого файла]\n",
+                                            if self.state.provider==Provider::Github {"[GitHub did not include a text patch for this file]\n"}else{"[GitLab limited the diff for this file]\n"},
+                                            if self.state.provider==Provider::Github {"[GitHub не вернул текстовый дифф этого файла]\n"}else{"[GitLab ограничил дифф этого файла]\n"},
                                         )
                                     } else {
                                         ""
@@ -1338,8 +1591,9 @@ impl App {
         self.unknown_change.as_ref().map(|message| {
             crate::tr!(
                 self.state.language,
-                "Change outcome unknown. Verify the result in GitLab. {}",
-                "Результат изменения неизвестен. Сверьте состояние в GitLab. {}",
+                "Change outcome unknown. Verify the result in {}. {}",
+                "Результат изменения неизвестен. Сверьте состояние в {}. {}",
+                self.state.provider.name(),
                 self.state.language.error_message(message)
             )
         })

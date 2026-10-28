@@ -1,4 +1,4 @@
-use crate::i18n::Language;
+use crate::{i18n::Language, provider::Provider};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -201,6 +201,7 @@ pub enum Popup {
 
 #[derive(Clone, Debug)]
 pub struct State {
+    pub provider: Provider,
     pub language: crate::i18n::Language,
     pub host: String,
     pub demo: bool,
@@ -226,6 +227,7 @@ impl State {
     pub fn new(host: String, demo: bool) -> Self {
         Self {
             language: crate::i18n::Language::En,
+            provider: Provider::Gitlab,
             host,
             demo,
             context: Context::default(),
@@ -245,6 +247,15 @@ impl State {
             favorites: BTreeSet::new(),
             tick: 0,
         }
+    }
+    pub fn settings(&self) -> &'static [Setting] {
+        match self.provider {
+            Provider::Gitlab => SETTINGS,
+            Provider::Github => GITHUB_SETTINGS,
+        }
+    }
+    pub fn title(&self, view: View) -> &'static str {
+        self.provider.title(view, self.language)
     }
     pub fn selected(&self) -> Option<&Value> {
         self.rows.get(self.selected)
@@ -388,12 +399,65 @@ pub const SETTINGS: &[Setting] = &[
     },
 ];
 
+pub const GITHUB_SETTINGS: &[Setting] = &[
+    SETTINGS[1],
+    SETTINGS[3],
+    Setting {
+        key: "delete_branch_on_merge",
+        label: "Удалять ветку после слияния",
+        group: "Pull requests",
+        kind: SettingKind::Bool,
+        help: "Удалять исходную ветку после слияния pull request.",
+    },
+    Setting {
+        key: "allow_merge_commit",
+        label: "Разрешить merge commit",
+        group: "Pull requests",
+        kind: SettingKind::Bool,
+        help: "Разрешить слияние pull request отдельным merge-коммитом.",
+    },
+    Setting {
+        key: "allow_squash_merge",
+        label: "Разрешить squash",
+        group: "Pull requests",
+        kind: SettingKind::Bool,
+        help: "Разрешить объединение коммитов pull request в один.",
+    },
+    Setting {
+        key: "allow_rebase_merge",
+        label: "Разрешить rebase",
+        group: "Pull requests",
+        kind: SettingKind::Bool,
+        help: "Разрешить слияние pull request с перебазированием.",
+    },
+    Setting {
+        key: "has_issues",
+        label: "Issues",
+        group: "Возможности",
+        kind: SettingKind::Bool,
+        help: "Включить трекер issues репозитория.",
+    },
+    Setting {
+        key: "has_wiki",
+        label: "Wiki",
+        group: "Возможности",
+        kind: SettingKind::Bool,
+        help: "Включить Wiki репозитория, если доступна для этого тарифа.",
+    },
+];
+
 impl Setting {
     pub fn label_in(&self, language: Language) -> &'static str {
         if language == Language::Ru {
             return self.label;
         }
         match self.key {
+            "delete_branch_on_merge" => "Delete branch after merge",
+            "allow_merge_commit" => "Allow merge commits",
+            "allow_squash_merge" => "Allow squash merging",
+            "allow_rebase_merge" => "Allow rebase merging",
+            "has_issues" => "Issues",
+            "has_wiki" => "Wiki",
             "name" => "Project name",
             "description" => "Description",
             "visibility" => "Visibility",
@@ -428,6 +492,12 @@ impl Setting {
             return self.help;
         }
         match self.key {
+            "delete_branch_on_merge" => "Delete the source branch after merging a pull request.",
+            "allow_merge_commit" => "Allow pull requests to be merged with a merge commit.",
+            "allow_squash_merge" => "Allow pull request commits to be squashed into one commit.",
+            "allow_rebase_merge" => "Allow pull requests to be merged with a rebase.",
+            "has_issues" => "Enable the repository issue tracker.",
+            "has_wiki" => "Enable the repository Wiki when available for this plan.",
             "name" => "Human-readable project name. The repository path stays unchanged.",
             "description" => "Project description shown in the catalog and project overview.",
             "visibility" => "Who can see the project. Changing this may expose its contents.",

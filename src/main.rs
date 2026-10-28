@@ -9,6 +9,7 @@ use gitlab_deck::{
     config::Preferences,
     i18n::Language,
     model::{ApiError, Request, Response},
+    provider::Provider,
     ui,
 };
 use std::{
@@ -21,11 +22,17 @@ use std::{
 #[derive(Parser)]
 #[command(
     version,
-    about = "GitLab Deck — projects, code, and CI in your terminal"
+    about = "Forge Deck — projects, code, and CI in your terminal"
 )]
 struct Args {
-    #[arg(long, help = "GitLab hostname[:port], for example gitlab.example.org")]
+    #[arg(long, help = "Server hostname[:port], without scheme or path")]
     host: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Forge provider (gitlab or github); press G in the TUI to switch"
+    )]
+    provider: Option<Provider>,
     #[arg(
         long,
         value_enum,
@@ -46,6 +53,7 @@ struct Work {
     host: String,
     demo: bool,
     language: Language,
+    provider: Provider,
     request: Request,
     cancel: Arc<AtomicBool>,
 }
@@ -69,6 +77,7 @@ fn effects(
                     host: app.state.host.clone(),
                     demo: app.state.demo,
                     language: app.state.language,
+                    provider: app.state.provider,
                     request,
                     cancel,
                 };
@@ -85,16 +94,34 @@ fn effects(
                     );
                 }
             }
+            Effect::SwitchProvider => {
+                let provider = app.state.provider.toggle();
+                let host = if app.state.demo {
+                    provider.demo_host().into()
+                } else {
+                    preferences
+                        .host_for(provider)
+                        .unwrap_or_else(|| provider.default_host().into())
+                };
+                let next = app.connect(provider, host);
+                if effects(app, next, sender, preferences) {
+                    return true;
+                }
+            }
             Effect::HostChanged => {
                 app.state.favorites = if app.state.demo {
                     Default::default()
                 } else {
-                    preferences.favorites(&app.state.host)
+                    preferences.favorites_for(app.state.provider, &app.state.host)
                 };
                 if !app.state.demo
                     && let Err(error) = {
                         preferences.set_language(app.state.language);
-                        preferences.save(&app.state.host, &app.state.favorites)
+                        preferences.save_for(
+                            app.state.provider,
+                            &app.state.host,
+                            &app.state.favorites,
+                        )
                     }
                 {
                     app.state.error = Some(error);
@@ -104,7 +131,11 @@ fn effects(
                 if !app.state.demo
                     && let Err(error) = {
                         preferences.set_language(app.state.language);
-                        preferences.save(&app.state.host, &app.state.favorites)
+                        preferences.save_for(
+                            app.state.provider,
+                            &app.state.host,
+                            &app.state.favorites,
+                        )
                     }
                 {
                     app.state.error = Some(error);
@@ -119,17 +150,16 @@ fn run(app: &mut App, preferences: &mut Preferences) -> io::Result<()> {
     let (send_work, receive_work) = mpsc::channel::<Work>();
     let (send_result, receive_result) = mpsc::channel::<(u64, Result<Response, ApiError>)>();
     let worker = thread::spawn(move || {
-        let mut client: Option<(String, bool, Api)> = None;
+        let mut client: Option<(String, bool, Provider, Api)> = None;
         while let Ok(work) = receive_work.recv() {
             if work.cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 continue;
             }
-            if client
-                .as_ref()
-                .is_none_or(|(host, demo, _)| host != &work.host || *demo != work.demo)
-            {
-                match Api::new_in(&work.host, work.demo, work.language) {
-                    Ok(api) => client = Some((work.host.clone(), work.demo, api)),
+            if client.as_ref().is_none_or(|(host, demo, provider, _)| {
+                host != &work.host || *demo != work.demo || *provider != work.provider
+            }) {
+                match Api::new_for(&work.host, work.demo, work.language, work.provider) {
+                    Ok(api) => client = Some((work.host.clone(), work.demo, work.provider, api)),
                     Err(error) => {
                         if send_result.send((work.id, Err(error))).is_err() {
                             break;
@@ -138,7 +168,7 @@ fn run(app: &mut App, preferences: &mut Preferences) -> io::Result<()> {
                     }
                 }
             }
-            if let Some((_, _, api)) = &mut client {
+            if let Some((_, _, _, api)) = &mut client {
                 api.set_language(work.language);
                 let result = api.execute(&work.request, &work.cancel);
                 if send_result.send((work.id, result)).is_err() {
@@ -198,8 +228,8 @@ fn run(app: &mut App, preferences: &mut Preferences) -> io::Result<()> {
     }
     if unknown_on_exit {
         eprintln!("{}", app.state.language.text(
-            "A change request was sent. Exiting does not cancel it on the server: verify the result in GitLab before retrying.",
-            "Запрос изменения был отправлен. Выход не отменяет его на сервере: проверьте результат в GitLab перед повтором."
+            "A change request was sent. Exiting does not cancel it on the server: verify the result on the server before retrying.",
+            "Запрос изменения был отправлен. Выход не отменяет его на сервере: проверьте результат на сервере перед повтором."
         ));
     }
     result
@@ -216,25 +246,34 @@ fn main() {
             .or_else(|| preferences.language())
             .unwrap_or(initial_language);
         error_language = language;
+        let provider = args.provider.unwrap_or_else(|| preferences.provider());
         let host = args.host.unwrap_or_else(|| {
             if args.demo {
-                "gitlab.example.org".into()
+                provider.demo_host().into()
             } else {
                 preferences
-                    .host()
-                    .or_else(|| std::env::var("GITLAB_HOST").ok())
-                    .unwrap_or_else(|| "gitlab.com".into())
+                    .host_for(provider)
+                    .or_else(|| {
+                        std::env::var(if provider == Provider::Github {
+                            "GH_HOST"
+                        } else {
+                            "GITLAB_HOST"
+                        })
+                        .ok()
+                    })
+                    .unwrap_or_else(|| provider.default_host().into())
             }
         });
+        let mut app = App::new(host.clone(), args.demo);
+        app.state.provider = provider;
+        app.state.language = language;
         gitlab_deck::api::validate_host(&host)
             .map_err(|message| language.error_message(&message))?;
         if args.check {
-            let mut api = Api::new_in(&host, args.demo, language).map_err(|e| e.message)?;
+            let mut api =
+                Api::new_for(&host, args.demo, language, provider).map_err(|e| e.message)?;
             let response = api
-                .execute(
-                    &Request::get("projects?simple=true&per_page=50&page=1"),
-                    &AtomicBool::new(false),
-                )
+                .execute(&app.request()?, &AtomicBool::new(false))
                 .map_err(|e| e.message)?;
             let Response::Json(value) = response else {
                 return Err(language
@@ -252,32 +291,30 @@ fn main() {
                 "{}",
                 gitlab_deck::tr!(
                     language,
-                    "GitLab Deck {} · {} · {}\nConnection verified: {count} projects on the first page.",
-                    "GitLab Deck {} · {} · {}\nСоединение проверено: {count} проектов на первой странице.",
+                    "Forge Deck {} · {} · {}\nConnection verified: {count} projects on the first page.",
+                    "Forge Deck {} · {} · {}\nСоединение проверено: {count} проектов на первой странице.",
                     env!("CARGO_PKG_VERSION"),
                     host,
                     if args.demo {
                         language.text("DEMO", "ДЕМО")
                     } else {
-                        "GitLab"
+                        provider.name()
                     }
                 )
             );
             return Ok(());
         }
-        let mut app = App::new(host, args.demo);
-        app.state.language = language;
         if !args.demo {
-            app.state.favorites = preferences.favorites(&app.state.host);
+            app.state.favorites = preferences.favorites_for(app.state.provider, &app.state.host);
             {
                 preferences.set_language(app.state.language);
-                preferences.save(&app.state.host, &app.state.favorites)
+                preferences.save_for(app.state.provider, &app.state.host, &app.state.favorites)
             }?;
         }
         run(&mut app, &mut preferences).map_err(|e| e.to_string())
     })();
     if let Err(error) = result {
-        eprintln!("GitLab Deck: {}", error_language.error_message(&error));
+        eprintln!("Forge Deck: {}", error_language.error_message(&error));
         std::process::exit(1);
     }
 }

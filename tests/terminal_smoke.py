@@ -12,7 +12,7 @@ import termios
 import time
 
 
-def smoke(binary, columns, rows, language):
+def smoke(binary, columns, rows, language, provider):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
@@ -34,7 +34,7 @@ def smoke(binary, columns, rows, language):
 
     with tempfile.TemporaryDirectory(prefix="deck-pty-") as config:
         process = subprocess.Popen(
-            [str(binary), "--demo", "--lang", language], stdin=slave, stdout=slave, stderr=slave,
+            [str(binary), "--demo", "--lang", language,"--provider",provider], stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, "TERM": "xterm-256color", "XDG_CONFIG_HOME": config},
             preexec_fn=terminal_session,
         )
@@ -42,7 +42,7 @@ def smoke(binary, columns, rows, language):
             drain(1)
             assert process.poll() is None, output.decode(errors="replace")[-500:]
             if columns >= 80:
-                assert b"gitlab.example.org" in output
+                assert ("github.example.org" if provider=="github" else "gitlab.example.org").encode() in output
                 for key in [b"\r", b"p", b"\r", b"\r", b"?", b"q", b"s"]:
                     os.write(master, key)
                     drain(0.12)
@@ -65,11 +65,12 @@ def smoke(binary, columns, rows, language):
                 process.wait()
             os.close(master)
             os.close(slave)
-    print(f"PTY {language} {columns}x{rows}: запуск, навигация, выход, восстановление — OK")
+    print(f"PTY {provider} {language} {columns}x{rows}: запуск, навигация, выход, восстановление — OK")
 
 
 if __name__ == "__main__":
     executable = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/gitlab-deck").resolve()
-    for language in ["en", "ru"]:
-        for size in [(160, 48), (100, 32), (72, 22)]:
-            smoke(executable, *size, language)
+    for provider in ["gitlab","github"]:
+        for language in ["en", "ru"]:
+            for size in [(160, 48), (100, 32), (72, 22)]:
+                smoke(executable, *size, language,provider)

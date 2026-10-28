@@ -16,6 +16,19 @@ fn locale_selection_and_text_are_explicit() {
     assert_eq!(Language::Ru.text("Projects", "Проекты"), "Проекты");
     assert_eq!(Language::En.toggle(), Language::Ru);
     assert_eq!(Language::Ru.code(), "ru");
+    let github_error = "GitHub rejected the request: insufficient permissions (403)";
+    let russian = Language::Ru.error_message(github_error);
+    assert!(russian.contains("GitHub отклонил"));
+    assert_eq!(Language::En.error_message(&russian), github_error);
+    assert_eq!(
+        Language::Ru.error_message("GitHub user supplied text"),
+        "GitHub user supplied text"
+    );
+    assert!(
+        Language::Ru
+            .error_message("Could not start gh")
+            .contains("запустить gh")
+    );
     let count = 7;
     assert_eq!(
         gitlab_deck::tr!(Language::En, "{count} projects", "{count} проектов"),
