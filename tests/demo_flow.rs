@@ -199,6 +199,7 @@ fn github_navigation_settings_and_ci_follow_native_contracts() {
         press(&mut app, &mut api, KeyCode::Enter);
         assert_eq!(app.state.rows.len(), 3);
         press(&mut app, &mut api, KeyCode::Char('3'));
+        assert_eq!(app.state.selected().unwrap()["_project"]["id"], 0);
         press(&mut app, &mut api, KeyCode::Enter);
         assert_eq!(
             app.state.context.project.as_ref().unwrap()["full_name"],

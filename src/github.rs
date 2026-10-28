@@ -320,7 +320,11 @@ impl GitHubDemo {
                         })
                         .and_then(|repo| repo["name"].as_str())
                         .unwrap_or("api-gateway");
-                    json!({"items":page(vec![self.pull(repository)],query)})
+                    let mut issue = self.pull(repository);
+                    let fields = issue.as_object_mut().unwrap();
+                    fields.remove("base");
+                    fields.remove("head");
+                    json!({"items":page(vec![issue],query)})
                 }
                 ["repositories", id] => self
                     .repositories
