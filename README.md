@@ -257,6 +257,8 @@ Tests use demo data and a fake CLI. PTY checks cover both platforms and language
 
 CI runs formatting, Clippy, Rust tests, archive validation, and smoke checks against the extracted binaries on native Linux x86_64 and ARM64 runners. Pushing a `v*` tag reruns these checks, verifies the Cargo version and source commit, then publishes both archives and `SHA256SUMS`. Release notes live in `docs/releases/`; see the [changelog](CHANGELOG.md).
 
+If publishing fails, the draft is kept for inspection. Review the failed run and its draft, delete only that failed draft while keeping the Git tag, then rerun the workflow; published releases are never overwritten automatically.
+
 For a pull request, explain the behavior change, update both interface languages and READMEs where needed, and run the checks above.
 
 Found a bug? [Open an issue](https://github.com/IgorKramar/forge-deck/issues) with the version, terminal size, and reproduction steps. Keep private addresses, repository contents, and tokens out of reports.
