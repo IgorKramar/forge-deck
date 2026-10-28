@@ -8,7 +8,9 @@
 
 Repositories · pull & merge requests · Actions & pipelines
 
-![Version](https://img.shields.io/badge/version-0.3.0-7aa2f7?style=flat-square)
+[![CI](https://github.com/IgorKramar/forge-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/IgorKramar/forge-deck/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/IgorKramar/forge-deck?style=flat-square&color=7aa2f7)](https://github.com/IgorKramar/forge-deck/releases/latest)
+[![MIT](https://img.shields.io/badge/license-MIT-9ece6a?style=flat-square)](LICENSE)
 ![Rust](https://img.shields.io/badge/built_with-Rust-e0af68?style=flat-square)
 ![Linux](https://img.shields.io/badge/platform-Linux-9ece6a?style=flat-square)
 ![Tokyo Night](https://img.shields.io/badge/theme-Tokyo_Night-bb9af7?style=flat-square)
@@ -68,16 +70,38 @@ The same navigation, native GitLab actions. `G` switches back to your saved GitL
 
 ## Install
 
-You need **Linux**, a current stable **Rust** toolchain, Git, and the CLI for the platform you use: [GitHub CLI (`gh`)](https://cli.github.com/) and/or [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/).
+You need **Linux** and the CLI for the platform you use: [GitHub CLI (`gh`)](https://cli.github.com/) and/or [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/). Try `--demo` without either CLI or credentials.
+
+### Prebuilt binary
+
+[Releases](https://github.com/IgorKramar/forge-deck/releases/latest) include **x86_64** and **ARM64** Linux archives, built on Ubuntu 22.04 with glibc. They are not musl/Alpine binaries. No Rust toolchain is needed.
 
 ```sh
-cargo install --git https://github.com/IgorKramar/forge-deck --locked
+version=0.3.0
+target=x86_64-unknown-linux-gnu  # ARM64: aarch64-unknown-linux-gnu
+archive="forge-deck-v$version-$target.tar.gz"
+base="https://github.com/IgorKramar/forge-deck/releases/download/v$version"
+curl --fail --location --remote-name "$base/$archive" --remote-name "$base/SHA256SUMS" &&
+awk -v archive="$archive" '$2 == archive' SHA256SUMS | sha256sum --check - &&
+tar -xzf "$archive" &&
+install -Dm755 "forge-deck-v$version-$target/forge-deck" "$HOME/.local/bin/forge-deck" &&
+install -Dm755 "forge-deck-v$version-$target/gitlab-deck" "$HOME/.local/bin/gitlab-deck"
+```
+
+Keep `~/.local/bin` in your `PATH`. The archive includes both commands, both READMEs, the MIT license, changelog, design notes, screenshots, and `BUILDINFO.json` with the source commit and target.
+
+### Build with Cargo
+
+You need Git and a current stable Rust toolchain supporting edition 2024.
+
+```sh
+cargo install --git https://github.com/IgorKramar/forge-deck --tag v0.3.0 --locked
 ```
 
 Cargo installs `forge-deck` and the compatible `gitlab-deck` command, usually in `~/.cargo/bin`. Keep that directory in your `PATH`.
 
 <details>
-<summary>Build from source</summary>
+<summary>Build from a local checkout</summary>
 
 ```sh
 git clone https://github.com/IgorKramar/forge-deck.git
@@ -220,17 +244,26 @@ The old `gitlab-deck/config.json` is read only when the new file is absent. Plat
 [Ratatui](https://ratatui.rs/) and Crossterm render the UI; `gh api` / `glab api` handle REST transport. One background worker handles requests, with cancellation, timeouts, and generation IDs to reject stale results. See [authentication and terminal design](docs/adr/0001-terminal-and-authentication.md) and [GitHub integration](docs/adr/0002-multiple-forges.md).
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
 python3 tests/terminal_smoke.py target/release/forge-deck
 python3 tests/provider_hosts.py target/release/forge-deck
+python3 -m unittest discover -s tests -p test_release.py
 ```
 
 Tests use demo data and a fake CLI. PTY checks cover both platforms and languages at three terminal sizes. These checks do not change real repositories.
 
+CI runs formatting, Clippy, Rust tests, archive validation, and smoke checks against the extracted binaries on native Linux x86_64 and ARM64 runners. Pushing a `v*` tag reruns these checks, verifies the Cargo version and source commit, then publishes both archives and `SHA256SUMS`. Release notes live in `docs/releases/`; see the [changelog](CHANGELOG.md).
+
+For a pull request, explain the behavior change, update both interface languages and READMEs where needed, and run the checks above.
+
 Found a bug? [Open an issue](https://github.com/IgorKramar/forge-deck/issues) with the version, terminal size, and reproduction steps. Keep private addresses, repository contents, and tokens out of reports.
+
+## License
+
+[MIT](LICENSE) · Copyright © 2026 Igor Kramar.
 
 ---
 

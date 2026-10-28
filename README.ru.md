@@ -8,7 +8,9 @@
 
 Репозитории · pull и merge requests · Actions и пайплайны
 
-![Версия](https://img.shields.io/badge/version-0.3.0-7aa2f7?style=flat-square)
+[![CI](https://github.com/IgorKramar/forge-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/IgorKramar/forge-deck/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/IgorKramar/forge-deck?style=flat-square&color=7aa2f7)](https://github.com/IgorKramar/forge-deck/releases/latest)
+[![MIT](https://img.shields.io/badge/license-MIT-9ece6a?style=flat-square)](LICENSE)
 ![Rust](https://img.shields.io/badge/built_with-Rust-e0af68?style=flat-square)
 ![Linux](https://img.shields.io/badge/platform-Linux-9ece6a?style=flat-square)
 ![Tokyo Night](https://img.shields.io/badge/theme-Tokyo_Night-bb9af7?style=flat-square)
@@ -68,16 +70,38 @@ Forge Deck — самостоятельный TUI на Rust для GitHub, GitHu
 
 ## Установка
 
-Нужны **Linux**, актуальный стабильный **Rust**, Git и CLI используемой платформы: [GitHub CLI (`gh`)](https://cli.github.com/) и/или [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/).
+Нужны **Linux** и CLI используемой платформы: [GitHub CLI (`gh`)](https://cli.github.com/) и/или [GitLab CLI (`glab`)](https://docs.gitlab.com/cli/). Для `--demo` не нужны ни CLI, ни доступы.
+
+### Готовый бинарник
+
+В [Releases](https://github.com/IgorKramar/forge-deck/releases/latest) доступны архивы Linux для **x86_64** и **ARM64**, собранные на Ubuntu 22.04 с glibc. Они не предназначены для musl/Alpine. Rust для запуска не нужен.
 
 ```sh
-cargo install --git https://github.com/IgorKramar/forge-deck --locked
+version=0.3.0
+target=x86_64-unknown-linux-gnu  # ARM64: aarch64-unknown-linux-gnu
+archive="forge-deck-v$version-$target.tar.gz"
+base="https://github.com/IgorKramar/forge-deck/releases/download/v$version"
+curl --fail --location --remote-name "$base/$archive" --remote-name "$base/SHA256SUMS" &&
+awk -v archive="$archive" '$2 == archive' SHA256SUMS | sha256sum --check - &&
+tar -xzf "$archive" &&
+install -Dm755 "forge-deck-v$version-$target/forge-deck" "$HOME/.local/bin/forge-deck" &&
+install -Dm755 "forge-deck-v$version-$target/gitlab-deck" "$HOME/.local/bin/gitlab-deck"
+```
+
+Добавьте `~/.local/bin` в `PATH`. В архиве находятся обе команды, оба README, лицензия MIT, changelog, описания архитектурных решений, скриншоты и `BUILDINFO.json` с коммитом исходников и платформой.
+
+### Сборка через Cargo
+
+Нужны Git и актуальный стабильный Rust с поддержкой edition 2024.
+
+```sh
+cargo install --git https://github.com/IgorKramar/forge-deck --tag v0.3.0 --locked
 ```
 
 Cargo установит `forge-deck` и совместимую команду `gitlab-deck`, обычно в `~/.cargo/bin`. Этот каталог должен быть в `PATH`.
 
 <details>
-<summary>Сборка из исходников</summary>
+<summary>Сборка из локального клона</summary>
 
 ```sh
 git clone https://github.com/IgorKramar/forge-deck.git
@@ -220,17 +244,26 @@ $XDG_CONFIG_HOME/forge-deck/config.json
 Интерфейс построен на [Ratatui](https://ratatui.rs/) и Crossterm, REST-транспорт — на `gh api` / `glab api`. Один фоновый обработчик выполняет запросы; отмена, тайм-ауты и номера поколений защищают от зависаний и устаревших ответов. Подробнее: [терминал и авторизация](docs/adr/0001-terminal-and-authentication.md), [интеграция GitHub](docs/adr/0002-multiple-forges.md).
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
 python3 tests/terminal_smoke.py target/release/forge-deck
 python3 tests/provider_hosts.py target/release/forge-deck
+python3 -m unittest discover -s tests -p test_release.py
 ```
 
 Тесты используют демоданные и подставной CLI. Проверка PTY охватывает обе платформы и оба языка при трёх размерах терминала. Реальные репозитории при этих проверках не изменяются.
 
+CI проверяет форматирование, Clippy, Rust-тесты, архивы и извлечённые бинарники на нативных Linux-раннерах x86_64 и ARM64. Пуш тега `v*` повторяет проверки, сверяет версию Cargo и коммит исходников, затем публикует оба архива и `SHA256SUMS`. Описания релизов находятся в `docs/releases/`; изменения — в [changelog](CHANGELOG.md).
+
+Для pull request опишите изменение поведения, при необходимости обновите оба языка интерфейса и README, затем выполните проверки выше.
+
 Нашли ошибку? [Создайте issue](https://github.com/IgorKramar/forge-deck/issues) с версией приложения, размером терминала и шагами воспроизведения. Не прикладывайте приватные адреса, содержимое репозиториев и токены.
+
+## Лицензия
+
+[MIT](LICENSE) · Copyright © 2026 Igor Kramar.
 
 ---
 
